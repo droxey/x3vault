@@ -45,7 +45,7 @@ func TestResolveBuildRootAlongsideVault(t *testing.T) {
 	if err := cfg.Resolve(filepath.Join(vault, ConfigFileName)); err != nil {
 		t.Fatal(err)
 	}
-	want, err := filepath.Abs(filepath.Join(filepath.Dir(vault), "xte", "build"))
+	want, err := filepath.Abs(filepath.Join(filepath.Dir(vault), EreaderDirName, "build"))
 	if err != nil {
 		t.Fatal(err)
 	}

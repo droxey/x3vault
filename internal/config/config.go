@@ -12,14 +12,15 @@ import (
 
 const SchemaVersion = 1
 
-// Tool paths and device defaults (formerly .x3vault / /x3vault).
+// Tool paths and device defaults.
 const (
-	ConfigFileName       = ".xte.yaml"
-	LegacyConfigFileName = ".x3vault.yaml"
-	ToolDirName          = ".xte"
-	DefaultBuildRootRel  = "../xte/build"
-	DefaultDeviceRoot    = "/xte"
-	DefaultOwnershipTool = "xte"
+	ConfigFileName           = ".ereader.yaml"
+	LegacyXTEConfigFileName  = ".xte.yaml"
+	LegacyConfigFileName     = ".x3vault.yaml"
+	EreaderDirName           = "ereader"
+	DefaultBuildRootRel      = "../ereader/build"
+	DefaultDeviceRoot        = "/ereader"
+	DefaultOwnershipTool     = "ereader"
 )
 
 type BuildConfig struct {
@@ -256,18 +257,16 @@ func ConfigPath(vaultRoot string) string {
 	return filepath.Join(vaultRoot, ConfigFileName)
 }
 
-// ResolveConfigPath returns the config file to use, preferring .xte.yaml with
-// a fallback to legacy .x3vault.yaml when present.
+// ResolveConfigPath returns the config file to use, preferring .ereader.yaml with
+// fallbacks to legacy .xte.yaml and .x3vault.yaml when present.
 func ResolveConfigPath(vaultRoot string) string {
-	primary := ConfigPath(vaultRoot)
-	if _, err := os.Stat(primary); err == nil {
-		return primary
+	for _, name := range []string{ConfigFileName, LegacyXTEConfigFileName, LegacyConfigFileName} {
+		p := filepath.Join(vaultRoot, name)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
 	}
-	legacy := filepath.Join(vaultRoot, LegacyConfigFileName)
-	if _, err := os.Stat(legacy); err == nil {
-		return legacy
-	}
-	return primary
+	return ConfigPath(vaultRoot)
 }
 
 func (c *Config) SourceDir() string {
