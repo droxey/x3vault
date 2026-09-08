@@ -13,7 +13,6 @@ import (
 
 	"github.com/droxey/x3vault/internal/config"
 	"github.com/droxey/x3vault/internal/markdown"
-	"github.com/droxey/x3vault/internal/obsidian"
 	"github.com/droxey/x3vault/internal/vault"
 )
 
@@ -54,7 +53,7 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 		noteRefs[i] = markdown.NoteRef{RelPath: n.RelPath, AbsPath: n.AbsPath}
 	}
 	indexResult := markdown.BuildNoteIndex(noteRefs)
-	attachmentAbs := resolveAttachmentFolder(cfg)
+	attachmentAbs := cfg.ResolveAttachmentFolderAbs()
 	wikiDirs := cfg.Wiki
 	wikiDirs.Normalize()
 
@@ -134,17 +133,6 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 	}
 	res.StagingDir = current
 	return res, nil
-}
-
-func resolveAttachmentFolder(cfg *config.Config) string {
-	if cfg.Build.AttachmentFolder != "" {
-		return filepath.Join(cfg.VaultRoot, filepath.FromSlash(cfg.Build.AttachmentFolder))
-	}
-	if !cfg.Build.ReadObsidianConfig {
-		return ""
-	}
-	rel := obsidian.AttachmentFolder(cfg.VaultRoot)
-	return obsidian.ResolveAttachmentPath(cfg.VaultRoot, rel)
 }
 
 // pruneIgnoredOutput removes any files or directories under ignored_dirs from build output.

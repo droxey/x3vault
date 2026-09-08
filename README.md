@@ -28,11 +28,12 @@ For vault at `/path/to/llmwiki-vault/`:
 /path/to/
 ├── llmwiki-vault/              ← Obsidian vault (read-only to x3vault)
 │   ├── .xte/config.yaml        ← program config (only vault write)
+│   ├── assets/                 ← default attachment source (bare ![[file]] embeds)
 │   └── wiki/
 └── ereader/build/current/      ← build output (default build_root)
     ├── wiki/                   ← normalized notes
     │   └── entities/note.md
-    └── assets/                 ← referenced attachments
+    └── assets/                 ← copied attachments (same folder name)
         └── ab12/paper.pdf
 ```
 
@@ -69,9 +70,11 @@ wiki/
 
 ## Attachments
 
-Embeds like `![[diagram.png]]` and `![[paper.pdf]]` are copied into `assets/` during build. x3vault must know where attachment files live in your vault.
+Embeds like `![[diagram.png]]` and `![[paper.pdf]]` are copied from the vault into `ereader/build/current/assets/` during build.
 
-**Option A — Obsidian config (recommended):** set `attachmentFolderPath` in `.obsidian/app.json` (Obsidian’s default). With `build.read_obsidian_config: true` (the default), x3vault reads this automatically:
+**Default attachment source:** `{vault}/assets/` — the same folder name as build output `assets/`. Put attachment files there and bare embed names resolve without extra config.
+
+**Obsidian override:** when `build.read_obsidian_config: true` (the default) and `.obsidian/app.json` sets `attachmentFolderPath`, that path is used instead:
 
 ```json
 {
@@ -79,17 +82,17 @@ Embeds like `![[diagram.png]]` and `![[paper.pdf]]` are copied into `assets/` du
 }
 ```
 
-**Option B — x3vault config:** set an explicit folder relative to the vault root:
+**Explicit override** in `.xte/config.yaml`:
 
 ```yaml
 build:
-  attachment_folder: attachments
-  read_obsidian_config: false   # optional: ignore Obsidian settings
+  attachment_folder: attachments   # default: assets (matches assets_root)
+  read_obsidian_config: false      # optional: ignore Obsidian settings
 ```
 
-**Path-style embeds** (`![[attachments/diagram.png]]`) resolve relative to the vault without extra config.
+**Path-style embeds** (`![[assets/diagram.png]]`) resolve relative to the vault without extra config.
 
-**Not searched:** paths under `sync.exclude_vault_paths` (including `raw/`). Put attachments in your configured attachment folder or beside notes, not in excluded dirs.
+**Not searched:** paths under `sync.exclude_vault_paths` (including `raw/`). Put attachments in `assets/` or your configured attachment folder, not in excluded dirs.
 
 If attachment resolution fails, `build` prints warnings and leaves broken links in output — run `x3vault build` and check stderr.
 
@@ -125,7 +128,7 @@ wiki:
 
 build:
   assets_root: assets          # copied attachments (images, PDFs, etc.) for device links
-  attachment_folder: ""        # override Obsidian attachment path (relative to vault)
+  attachment_folder: assets    # vault source folder for bare ![[file]] embeds; Obsidian overrides when set
   read_obsidian_config: true   # read .obsidian/app.json for attachmentFolderPath
 
 sync:
