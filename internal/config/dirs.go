@@ -2,51 +2,71 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
 
-// LLMWikiDefaults follows the Karpathy LLM Wiki layout documented in the
-// official pattern (wiki/index.md, sources/, entities/, concepts/, analyses/)
-// and implemented by github.com/microsoft/llmwiki.
+const (
+	WikiModeAllExceptIgnored = "all_except_ignored"
+	WikiModeWhitelist        = "whitelist"
+)
+
+// LLMWikiStandardDirs are the conventional LLM Wiki folders used for init hints.
+// See https://github.com/droxey/x3vault and the Karpathy LLM Wiki pattern.
+var LLMWikiStandardDirs = []string{
+	"sources",
+	"entities",
+	"concepts",
+	"analyses",
+}
+
+// LLMWikiDefaults is the default wiki directory policy for github.com/droxey/x3vault.
 var LLMWikiDefaults = WikiDirs{
-	Allowed: []string{
-		"sources",
-		"entities",
-		"concepts",
-		"analyses",
-	},
+	Mode: WikiModeAllExceptIgnored,
 	Ignored: []string{
 		"script",
 		"references",
 	},
 }
 
-// WikiDirs controls which subdirectories under source_root (typically wiki/)
-// are included in build/sync. Root-level *.md files are always included.
+// WikiDirs controls which subdirectories under source_root (wiki/) are synced.
+// Default mode syncs all subdirectories except ignored_dirs. Root-level *.md is always included.
+// raw/ is never synced (outside source_root).
 type WikiDirs struct {
-	Allowed []string `yaml:"allowed_dirs"`
-	Ignored []string `yaml:"ignored_dirs"`
+	Mode         string   `yaml:"mode"`
+	Allowed      []string `yaml:"allowed_dirs,omitempty"`
+	Ignored      []string `yaml:"ignored_dirs"`
+	StandardDirs []string `yaml:"standard_dirs"`
 }
 
 func DefaultWikiDirs() WikiDirs {
 	return WikiDirs{
-		Allowed: append([]string(nil), LLMWikiDefaults.Allowed...),
-		Ignored: append([]string(nil), LLMWikiDefaults.Ignored...),
+		Mode:         LLMWikiDefaults.Mode,
+		Ignored:      append([]string(nil), LLMWikiDefaults.Ignored...),
+		StandardDirs: append([]string(nil), LLMWikiStandardDirs...),
 	}
 }
 
 func (w *WikiDirs) Normalize() {
+	w.Mode = strings.TrimSpace(w.Mode)
+	if w.Mode == "" {
+		w.Mode = WikiModeAllExceptIgnored
+	}
 	w.Allowed = normalizeDirList(w.Allowed)
 	w.Ignored = normalizeDirList(w.Ignored)
 }
 
 func (w *WikiDirs) RestoreDefaults() {
-	w.Allowed = append([]string(nil), LLMWikiDefaults.Allowed...)
-	w.Ignored = append([]string(nil), LLMWikiDefaults.Ignored...)
+	*w = DefaultWikiDirs()
 }
 
 func (w *WikiDirs) Validate() error {
+	switch w.Mode {
+	case WikiModeAllExceptIgnored, WikiModeWhitelist:
+	default:
+		return fmt.Errorf("unsupported wiki.mode %q (want %q or %q)", w.Mode, WikiModeAllExceptIgnored, WikiModeWhitelist)
+	}
 	for _, d := range w.Allowed {
 		if err := validateDirEntry(d, "allowed_dirs"); err != nil {
 			return err
@@ -56,6 +76,9 @@ func (w *WikiDirs) Validate() error {
 		if err := validateDirEntry(d, "ignored_dirs"); err != nil {
 			return err
 		}
+	}
+	if w.Mode == WikiModeWhitelist && len(w.Allowed) == 0 {
+		return fmt.Errorf("wiki.mode %q requires at least one allowed_dirs entry", WikiModeWhitelist)
 	}
 	for _, a := range w.Allowed {
 		for _, ig := range w.Ignored {
@@ -105,8 +128,6 @@ func cleanDirEntry(dir string) string {
 	return dir
 }
 
-// ShouldIncludeRelPath reports whether a note path relative to source_root
-// should be discovered. Root-level markdown files are always included.
 func (w *WikiDirs) ShouldIncludeRelPath(rel string) bool {
 	rel = filepath.ToSlash(rel)
 	if rel == "." || !strings.Contains(rel, "/") {
@@ -115,10 +136,29 @@ func (w *WikiDirs) ShouldIncludeRelPath(rel string) bool {
 	if w.isIgnored(rel) {
 		return false
 	}
-	if len(w.Allowed) == 0 {
+	if w.Mode == WikiModeAllExceptIgnored {
 		return true
 	}
 	return w.isAllowed(rel)
+}
+
+func (w *WikiDirs) ShouldWalkDir(relDir string) bool {
+	relDir = cleanDirEntry(relDir)
+	if relDir == "" || relDir == "." {
+		return true
+	}
+	if w.isIgnored(relDir) {
+		return false
+	}
+	if w.Mode == WikiModeAllExceptIgnored {
+		return true
+	}
+	for _, al := range w.Allowed {
+		if dirRelevant(relDir, al) {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *WikiDirs) isIgnored(rel string) bool {
@@ -133,27 +173,6 @@ func (w *WikiDirs) isIgnored(rel string) bool {
 func (w *WikiDirs) isAllowed(rel string) bool {
 	for _, al := range w.Allowed {
 		if dirMatches(rel, al) {
-			return true
-		}
-	}
-	return false
-}
-
-// ShouldWalkDir reports whether to descend into a subdirectory of source_root.
-// The source root itself is always walked.
-func (w *WikiDirs) ShouldWalkDir(relDir string) bool {
-	relDir = cleanDirEntry(relDir)
-	if relDir == "" || relDir == "." {
-		return true
-	}
-	if w.isIgnored(relDir) {
-		return false
-	}
-	if len(w.Allowed) == 0 {
-		return true
-	}
-	for _, al := range w.Allowed {
-		if dirRelevant(relDir, al) {
 			return true
 		}
 	}
@@ -182,4 +201,17 @@ func dirMatches(rel, pattern string) bool {
 		return true
 	}
 	return strings.HasPrefix(rel, pattern+"/")
+}
+
+// MissingStandardDirs returns LLM Wiki folders absent under wikiPath (for init hints).
+func MissingStandardDirs(wikiPath string, standardDirs []string) []string {
+	var missing []string
+	for _, d := range standardDirs {
+		p := filepath.Join(wikiPath, d)
+		st, err := os.Stat(p)
+		if err != nil || !st.IsDir() {
+			missing = append(missing, d)
+		}
+	}
+	return missing
 }

@@ -36,12 +36,15 @@ type Transport struct {
 	HTTPClient *http.Client
 }
 
-func NewTransport(baseURL string) *Transport {
+func NewTransport(baseURL string, timeout time.Duration) *Transport {
 	baseURL = strings.TrimRight(baseURL, "/")
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
 	return &Transport{
 		BaseURL: baseURL,
 		HTTPClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: timeout,
 		},
 	}
 }
@@ -159,6 +162,20 @@ func (t *Transport) Delete(itemPath, itemType string) error {
 		return fmt.Errorf("delete %s HTTP %d: %s", itemPath, resp.StatusCode, body)
 	}
 	return nil
+}
+
+func (t *Transport) ReadFile(itemPath string) ([]byte, error) {
+	u := t.BaseURL + "/download?path=" + url.QueryEscape(itemPath)
+	resp, err := t.HTTPClient.Get(u)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", itemPath, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("read %s HTTP %d: %s", itemPath, resp.StatusCode, body)
+	}
+	return io.ReadAll(resp.Body)
 }
 
 func (t *Transport) EnsureDir(root, relDir string) error {

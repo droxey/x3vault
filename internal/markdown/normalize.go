@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,7 +13,7 @@ import (
 
 // Obsidian-style patterns
 var (
-	reWikilink    = regexp.MustCompile(`\[\[([^\]|#]+)(?:\|([^\]]+))?(?:#([^\]]+))?\]\]`)
+	reWikilink    = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	reEmbed       = regexp.MustCompile(`!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]`)
 	reComment     = regexp.MustCompile(`%%[\s\S]*?%%`)
 	reFrontmatter = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n?`)
@@ -37,24 +38,14 @@ type NormalizedNote struct {
 }
 
 type NormalizeOpts struct {
-	VaultRoot   string
-	SourceRoot  string
-	SourceRel   string // e.g. "wiki" — output prefix on device
-	NoteIndex   map[string]string
-	AssetOutDir string
-}
-
-func BuildNoteIndex(notes []struct{ RelPath, AbsPath string }) map[string]string {
-	idx := make(map[string]string)
-	for _, n := range notes {
-		rel := n.RelPath
-		idx[rel] = rel
-		noExt := strings.TrimSuffix(rel, ".md")
-		idx[noExt] = rel
-		base := strings.TrimSuffix(filepath.Base(rel), ".md")
-		idx[base] = rel
-	}
-	return idx
+	VaultRoot           string
+	SourceRoot          string
+	SourceRel           string
+	AssetsRoot          string
+	NoteIndex           map[string]string
+	AttachmentFolder    string
+	IsExcludedVaultPath func(string) bool
+	AssetOutDir         string
 }
 
 func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, error) {
@@ -92,21 +83,27 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 		}
 
 		ext := strings.ToLower(filepath.Ext(target))
-		if isImageExt(ext) {
-			asset, err := resolveAsset(target, opts)
-			if err != nil {
-				out.Warnings = append(out.Warnings, fmt.Sprintf("missing asset %s: %v", target, err))
+		if ext != "" && ext != ".md" {
+			asset, err := resolveAsset(target, noteDir, opts)
+			if err == nil {
+				out.Assets = append(out.Assets, *asset)
 				if alt == "" {
-					alt = target
+					alt = filepath.Base(target)
 				}
+				href := relPathFromNote(noteDir, asset.DeviceRel, opts.SourceRel)
+				if isImageExt(ext) {
+					return fmt.Sprintf("![%s](%s)", alt, href)
+				}
+				return fmt.Sprintf("[%s](%s)", alt, href)
+			}
+			out.Warnings = append(out.Warnings, fmt.Sprintf("missing attachment %s: %v", target, err))
+			if alt == "" {
+				alt = target
+			}
+			if isImageExt(ext) {
 				return fmt.Sprintf("![%s](%s)", alt, target)
 			}
-			out.Assets = append(out.Assets, *asset)
-			if alt == "" {
-				alt = filepath.Base(target)
-			}
-			href := relPathFromNote(noteDir, asset.DeviceRel, opts.SourceRel)
-			return fmt.Sprintf("![%s](%s)", alt, href)
+			return fmt.Sprintf("[%s](%s)", alt, target)
 		}
 
 		resolved, ok := resolveNote(target, opts.NoteIndex)
@@ -124,15 +121,10 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 
 	text = reWikilink.ReplaceAllStringFunc(text, func(match string) string {
 		sub := reWikilink.FindStringSubmatch(match)
-		target := strings.TrimSpace(sub[1])
-		label := ""
-		heading := ""
-		if len(sub) > 2 && sub[2] != "" {
-			label = strings.TrimSpace(sub[2])
+		if len(sub) < 2 {
+			return match
 		}
-		if len(sub) > 3 && sub[3] != "" {
-			heading = strings.TrimSpace(sub[3])
-		}
+		target, heading, label := parseWikilink(sub[1])
 
 		resolved, ok := resolveNote(target, opts.NoteIndex)
 		if !ok {
@@ -172,13 +164,43 @@ func resolveNote(target string, idx map[string]string) (string, bool) {
 	return "", false
 }
 
-func resolveAsset(target string, opts NormalizeOpts) (*AssetRef, error) {
-	candidates := []string{
-		filepath.Join(opts.VaultRoot, target),
-		filepath.Join(opts.SourceRoot, target),
-		filepath.Join(opts.VaultRoot, "Attachments", filepath.Base(target)),
-		filepath.Join(opts.VaultRoot, "assets", filepath.Base(target)),
+func assetCandidates(target, noteDir string, opts NormalizeOpts) []string {
+	base := filepath.Base(target)
+	assetsRoot := opts.AssetsRoot
+	if assetsRoot == "" {
+		assetsRoot = "assets"
 	}
+	var c []string
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		if opts.IsExcludedVaultPath != nil {
+			if rel, err := filepath.Rel(opts.VaultRoot, p); err == nil {
+				if opts.IsExcludedVaultPath(filepath.ToSlash(rel)) {
+					return
+				}
+			}
+		}
+		c = append(c, p)
+	}
+	if noteDir != "." && noteDir != "" {
+		add(filepath.Join(opts.SourceRoot, noteDir, target))
+	}
+	add(filepath.Join(opts.SourceRoot, target))
+	add(filepath.Join(opts.VaultRoot, target))
+	if opts.AttachmentFolder != "" {
+		add(filepath.Join(opts.AttachmentFolder, target))
+		add(filepath.Join(opts.AttachmentFolder, base))
+	}
+	add(filepath.Join(opts.VaultRoot, "Attachments", base))
+	add(filepath.Join(opts.VaultRoot, "assets", base))
+	add(filepath.Join(opts.SourceRoot, assetsRoot, base))
+	return c
+}
+
+func resolveAsset(target, noteDir string, opts NormalizeOpts) (*AssetRef, error) {
+	candidates := assetCandidates(target, noteDir, opts)
 	var found string
 	for _, c := range candidates {
 		if st, err := os.Stat(c); err == nil && !st.IsDir() {
@@ -197,14 +219,15 @@ func resolveAsset(target string, opts NormalizeOpts) (*AssetRef, error) {
 	sum := sha256.Sum256(data)
 	prefix := hex.EncodeToString(sum[:])[:4]
 	name := sanitizeName(filepath.Base(found))
-	deviceRel := filepath.ToSlash(filepath.Join("assets", prefix, name))
+	assetsRoot := opts.AssetsRoot
+	if assetsRoot == "" {
+		assetsRoot = "assets"
+	}
+	deviceRel := filepath.ToSlash(filepath.Join(assetsRoot, prefix, name))
 
 	if opts.AssetOutDir != "" {
 		dest := filepath.Join(opts.AssetOutDir, prefix, name)
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return nil, err
-		}
-		if err := os.WriteFile(dest, data, 0o644); err != nil {
+		if err := copyFileToDir(found, dest); err != nil {
 			return nil, err
 		}
 	}
@@ -216,11 +239,34 @@ func resolveAsset(target string, opts NormalizeOpts) (*AssetRef, error) {
 	}, nil
 }
 
+func copyFileToDir(src, dest string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
 func relPathFromNote(noteDir, target, sourceRel string) string {
+	if sourceRel == "" {
+		sourceRel = "wiki"
+	}
 	from := filepath.Join(sourceRel, noteDir)
-	to := target
-	if !strings.HasPrefix(target, "assets/") {
-		to = filepath.Join(sourceRel, target)
+	to := filepath.ToSlash(target)
+	srcPrefix := sourceRel + "/"
+	// Note paths from the index are relative to source_root (e.g. entities/foo.md).
+	if !strings.HasPrefix(to, srcPrefix) && strings.HasSuffix(to, ".md") {
+		to = filepath.ToSlash(filepath.Join(sourceRel, target))
 	}
 	rel, err := filepath.Rel(from, to)
 	if err != nil {

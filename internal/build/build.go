@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/droxey/x3vault/internal/config"
 	"github.com/droxey/x3vault/internal/markdown"
+	"github.com/droxey/x3vault/internal/obsidian"
 	"github.com/droxey/x3vault/internal/vault"
 )
 
@@ -23,39 +25,45 @@ type Result struct {
 	StagingDir string
 }
 
-func Run(cfgVaultRoot, cfgSourceRoot, cfgBuildRoot string, disc *vault.Discovery) (*Result, error) {
-	staging := filepath.Join(cfgBuildRoot, "staging")
-	wikiOut := filepath.Join(staging, cfgSourceRoot)
-	assetOut := filepath.Join(staging, "assets")
+func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
+	staging := filepath.Join(cfg.BuildRoot, "staging")
+	wikiOut := filepath.Join(staging, cfg.SourceRoot)
+	assetOut := filepath.Join(staging, cfg.Build.AssetsRoot)
 
-	// Clean previous staging
+	write := func(path string) error {
+		return vault.AssertBuildWritePath(path, cfg.BuildRoot)
+	}
+
 	_ = os.RemoveAll(staging)
 	if err := os.MkdirAll(wikiOut, 0o755); err != nil {
+		return nil, err
+	}
+	if err := write(wikiOut); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(assetOut, 0o755); err != nil {
 		return nil, err
 	}
+	if err := write(assetOut); err != nil {
+		return nil, err
+	}
 
-	// Build note index
-	type pair struct{ RelPath, AbsPath string }
-	pairs := make([]pair, len(disc.Notes))
+	noteRefs := make([]markdown.NoteRef, len(disc.Notes))
 	for i, n := range disc.Notes {
-		pairs[i] = pair{n.RelPath, n.AbsPath}
+		noteRefs[i] = markdown.NoteRef{RelPath: n.RelPath, AbsPath: n.AbsPath}
 	}
-	// convert for BuildNoteIndex
-	idxNotes := make([]struct{ RelPath, AbsPath string }, len(pairs))
-	for i, p := range pairs {
-		idxNotes[i] = struct{ RelPath, AbsPath string }{p.RelPath, p.AbsPath}
-	}
-	noteIndex := markdown.BuildNoteIndex(idxNotes)
+	indexResult := markdown.BuildNoteIndex(noteRefs)
+	attachmentAbs := resolveAttachmentFolder(cfg)
 
 	opts := markdown.NormalizeOpts{
-		VaultRoot:   cfgVaultRoot,
-		SourceRoot:  disc.SourceRoot,
-		SourceRel:   cfgSourceRoot,
-		NoteIndex:   noteIndex,
-		AssetOutDir: assetOut,
+		VaultRoot:           cfg.VaultRoot,
+		SourceRoot:          disc.SourceRoot,
+		SourceRel:           cfg.SourceRoot,
+		AssetsRoot:          cfg.Build.AssetsRoot,
+		NoteIndex:           indexResult.Index,
+		AttachmentFolder:    attachmentAbs,
+		IsExcludedVaultPath: cfg.IsExcludedVaultPath,
+		AssetOutDir:         assetOut,
 	}
 
 	res := &Result{StagingDir: staging}
@@ -74,13 +82,15 @@ func Run(cfgVaultRoot, cfgSourceRoot, cfgBuildRoot string, disc *vault.Discovery
 			res.Warnings = append(res.Warnings, n.RelPath+": unresolved [["+u+"]]")
 		}
 
-		// Emit note
 		dest := filepath.Join(wikiOut, n.RelPath)
+		if err := write(dest); err != nil {
+			res.Errors = append(res.Errors, err.Error())
+			continue
+		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			res.Errors = append(res.Errors, err.Error())
 			continue
 		}
-		// Prepend a minimal readable header
 		header := fmt.Sprintf("<!-- x3vault: %s -->\n", n.RelPath)
 		if norm.Title != "" {
 			header += fmt.Sprintf("<!-- title: %s -->\n", norm.Title)
@@ -100,27 +110,38 @@ func Run(cfgVaultRoot, cfgSourceRoot, cfgBuildRoot string, disc *vault.Discovery
 		}
 	}
 
-	// Generation ID from content hashes of all emitted notes (sorted)
 	gen, err := computeGeneration(wikiOut)
 	if err != nil {
 		return res, err
 	}
 	res.Generation = gen
 
-	// Write a simple manifest
 	manifest := fmt.Sprintf("generation: %s\nnotes: %d\nassets: %d\nbuilt: %s\n",
 		gen, res.Notes, res.Assets, time.Now().UTC().Format(time.RFC3339))
-	_ = os.WriteFile(filepath.Join(staging, "build.manifest"), []byte(manifest), 0o644)
+	manifestPath := filepath.Join(staging, "build.manifest")
+	if err := write(manifestPath); err != nil {
+		return res, err
+	}
+	_ = os.WriteFile(manifestPath, []byte(manifest), 0o644)
 
-	// Promote staging → current
-	current := filepath.Join(cfgBuildRoot, "current")
+	current := filepath.Join(cfg.BuildRoot, "current")
 	_ = os.RemoveAll(current)
 	if err := os.Rename(staging, current); err != nil {
-		// fallback copy on cross-device
 		return res, fmt.Errorf("promote staging: %w", err)
 	}
 	res.StagingDir = current
 	return res, nil
+}
+
+func resolveAttachmentFolder(cfg *config.Config) string {
+	if cfg.Build.AttachmentFolder != "" {
+		return filepath.Join(cfg.VaultRoot, filepath.FromSlash(cfg.Build.AttachmentFolder))
+	}
+	if !cfg.Build.ReadObsidianConfig {
+		return ""
+	}
+	rel := obsidian.AttachmentFolder(cfg.VaultRoot)
+	return obsidian.ResolveAttachmentPath(cfg.VaultRoot, rel)
 }
 
 func computeGeneration(wikiDir string) (string, error) {
