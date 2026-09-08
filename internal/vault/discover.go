@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/droxey/x3vault/internal/config"
 )
 
 type Note struct {
@@ -20,7 +22,7 @@ type Discovery struct {
 	Notes      []Note
 }
 
-func Discover(vaultRoot, sourceRel string) (*Discovery, error) {
+func Discover(vaultRoot, sourceRel string, dirs config.WikiDirs) (*Discovery, error) {
 	sourceAbs := filepath.Join(vaultRoot, sourceRel)
 	info, err := os.Stat(sourceAbs)
 	if err != nil {
@@ -39,8 +41,13 @@ func Discover(vaultRoot, sourceRel string) (*Discovery, error) {
 	if err != nil {
 		sourceCanon = sourceAbs
 	}
-	if !strings.HasPrefix(sourceCanon, vaultCanon) {
+	if !pathContainedIn(sourceCanon, vaultCanon) {
 		return nil, fmt.Errorf("source escapes vault root")
+	}
+
+	dirs.Normalize()
+	if err := dirs.Validate(); err != nil {
+		return nil, err
 	}
 
 	var notes []Note
@@ -53,6 +60,15 @@ func Discover(vaultRoot, sourceRel string) (*Discovery, error) {
 			if strings.HasPrefix(name, ".") {
 				return filepath.SkipDir
 			}
+			if path != sourceAbs {
+				relDir, err := filepath.Rel(sourceAbs, path)
+				if err != nil {
+					return err
+				}
+				if !dirs.ShouldWalkDir(relDir) {
+					return filepath.SkipDir
+				}
+			}
 			return nil
 		}
 		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
@@ -63,6 +79,9 @@ func Discover(vaultRoot, sourceRel string) (*Discovery, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		if !dirs.ShouldIncludeRelPath(rel) {
+			return nil
+		}
 		notes = append(notes, Note{
 			RelPath: rel,
 			AbsPath: path,
@@ -82,4 +101,14 @@ func Discover(vaultRoot, sourceRel string) (*Discovery, error) {
 		SourceRoot: sourceAbs,
 		Notes:      notes,
 	}, nil
+}
+
+func pathContainedIn(child, parent string) bool {
+	child = filepath.Clean(child)
+	parent = filepath.Clean(parent)
+	if child == parent {
+		return true
+	}
+	sep := string(os.PathSeparator)
+	return strings.HasPrefix(child, parent+sep)
 }
