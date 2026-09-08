@@ -18,3 +18,5 @@ jobs:
         run: go test ./... -count=1
       - name: Build
         run: go build -o bin/x3vault ./cmd/x3vault
+      - name: Smoke test
+        run: bash scripts/smoke.sh
