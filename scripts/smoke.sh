@@ -2,20 +2,20 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$ROOT/bin/x3vault"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 cd "$ROOT"
-go build -o "$BIN" ./cmd/x3vault
+GOBIN="$ROOT/bin" go install ./cmd/x3vault
+export PATH="$ROOT/bin:$PATH"
 
 VAULT="$TMP/vault"
 mkdir -p "$VAULT/wiki"
 echo '# Index' > "$VAULT/wiki/index.md"
 
-"$BIN" init --vault "$VAULT" >/dev/null
-"$BIN" build --vault "$VAULT" >/dev/null
-"$BIN" doctor --vault "$VAULT" >/dev/null
+x3vault init --vault "$VAULT" >/dev/null
+x3vault build --vault "$VAULT" >/dev/null
+x3vault doctor --vault "$VAULT" >/dev/null
 
 BUILD_CURRENT="$(dirname "$VAULT")/ereader/build/current"
 test -f "$BUILD_CURRENT/wiki/index.md"
