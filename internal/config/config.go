@@ -62,7 +62,7 @@ type Config struct {
 func DefaultBuild() BuildConfig {
 	return BuildConfig{
 		AssetsRoot:         DefaultAssetsRoot,
-		AttachmentFolder:   DefaultAssetsRoot,
+		AttachmentFolder:   "",
 		ReadObsidianConfig: true,
 	}
 }
@@ -329,24 +329,18 @@ func (c *Config) SourceDir() string {
 	return filepath.Join(c.VaultRoot, c.SourceRoot)
 }
 
-// ResolveAttachmentFolderAbs returns the vault directory used to resolve bare
-// embed names like ![[paper.pdf]]. Obsidian attachmentFolderPath wins when
-// read_obsidian_config is enabled; otherwise defaults to build.attachment_folder
-// (same as assets_root: assets/).
+// ResolveAttachmentFolderAbs returns the vault directory Obsidian (or config) uses
+// for bare embed names like ![[paper.pdf]]. Empty when unset.
 func (c *Config) ResolveAttachmentFolderAbs() string {
 	if c.Build.ReadObsidianConfig {
 		if rel := obsidian.AttachmentFolder(c.VaultRoot); rel != "" {
 			return obsidian.ResolveAttachmentPath(c.VaultRoot, rel)
 		}
 	}
-	folder := c.Build.AttachmentFolder
-	if folder == "" {
-		folder = c.Build.AssetsRoot
+	if c.Build.AttachmentFolder != "" {
+		return filepath.Join(c.VaultRoot, filepath.FromSlash(c.Build.AttachmentFolder))
 	}
-	if folder == "" {
-		folder = DefaultAssetsRoot
-	}
-	return filepath.Join(c.VaultRoot, filepath.FromSlash(folder))
+	return ""
 }
 
 func WriteDefault(path string) error {

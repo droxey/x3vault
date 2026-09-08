@@ -18,7 +18,7 @@ All build output is **markdown for on-device reading**: wikilinks become relativ
 
 ## Quick start
 
-Build copies every discovered wiki note (normalized for XTE e-reader viewing) and every referenced attachment from the Obsidian vault into `../ereader/build/current/` (alongside the vault folder). Sync mirrors that tree to the device at `/ereader`. The Obsidian vault is never modified.
+Build copies every discovered wiki note (normalized for XTE e-reader viewing) and **every referenced attachment** into `../ereader/build/current/assets/`. Sync mirrors the build tree to the device at `/ereader`. The Obsidian vault is never modified.
 
 ### Output layout
 
@@ -28,12 +28,11 @@ For vault at `/path/to/llmwiki-vault/`:
 /path/to/
 ├── llmwiki-vault/              ← Obsidian vault (read-only to x3vault)
 │   ├── .xte/config.yaml        ← program config (only vault write)
-│   ├── assets/                 ← default attachment source (bare ![[file]] embeds)
 │   └── wiki/
 └── ereader/build/current/      ← build output (default build_root)
     ├── wiki/                   ← normalized notes
     │   └── entities/note.md
-    └── assets/                 ← copied attachments (same folder name)
+    └── assets/                 ← all referenced attachments copied here
         └── ab12/paper.pdf
 ```
 
@@ -70,31 +69,34 @@ wiki/
 
 ## Attachments
 
-Embeds like `![[diagram.png]]` and `![[paper.pdf]]` are copied from the vault into `ereader/build/current/assets/` during build.
+Every referenced attachment — `![[file]]` embeds, `[[file.pdf]]` wikilinks, and inline `[text](file.pdf)` links — is **copied into** `ereader/build/current/assets/` during build. Notes in `ereader/build/current/wiki/` link to those copied files.
 
-**Default attachment source:** `{vault}/assets/` — the same folder name as build output `assets/`. Put attachment files there and bare embed names resolve without extra config.
+**Where x3vault looks in the vault** (first match wins):
 
-**Obsidian override:** when `build.read_obsidian_config: true` (the default) and `.obsidian/app.json` sets `attachmentFolderPath`, that path is used instead:
+1. Beside the note (`wiki/entities/file.png`)
+2. Obsidian `attachmentFolderPath` from `.obsidian/app.json` when `build.read_obsidian_config: true` (including paths under `raw/`)
+3. Explicit `build.attachment_folder` in config
+4. Vault-relative paths in the embed (`![[attachments/diagram.png]]`)
+5. `{vault}/assets/`, `{vault}/Attachments/`, and other standard candidates
 
 ```json
 {
-  "attachmentFolderPath": "attachments"
+  "attachmentFolderPath": "raw/assets"
 }
 ```
 
-**Explicit override** in `.xte/config.yaml`:
+**Override in config:**
 
 ```yaml
 build:
-  attachment_folder: attachments   # default: assets (matches assets_root)
-  read_obsidian_config: false      # optional: ignore Obsidian settings
+  assets_root: assets              # output folder under build/current/
+  attachment_folder: attachments   # optional vault source override
+  read_obsidian_config: true
 ```
 
-**Path-style embeds** (`![[assets/diagram.png]]`) resolve relative to the vault without extra config.
+**Not copied:** files under ignored wiki dirs (`script/`, `references/`) or other excluded vault paths, even when linked from a note.
 
-**Not searched:** paths under `sync.exclude_vault_paths` (including `raw/`). Put attachments in `assets/` or your configured attachment folder, not in excluded dirs.
-
-If attachment resolution fails, `build` prints warnings and leaves broken links in output — run `x3vault build` and check stderr.
+If attachment resolution fails, `build` prints warnings and leaves broken links — check stderr after `x3vault build`.
 
 ```bash
 ./bin/x3vault config show                            # full config YAML
@@ -127,8 +129,8 @@ wiki:
     - analyses
 
 build:
-  assets_root: assets          # copied attachments (images, PDFs, etc.) for device links
-  attachment_folder: assets    # vault source folder for bare ![[file]] embeds; Obsidian overrides when set
+  assets_root: assets          # all referenced attachments copied to build/current/assets/
+  attachment_folder: ""        # optional vault source override (Obsidian used when empty)
   read_obsidian_config: true   # read .obsidian/app.json for attachmentFolderPath
 
 sync:

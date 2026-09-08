@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -91,30 +90,14 @@ func TestRestoreDefaultsPreservingVault(t *testing.T) {
 	}
 }
 
-func TestDefaultAttachmentFolderIsAssets(t *testing.T) {
-	cfg := Default()
-	if cfg.Build.AttachmentFolder != DefaultAssetsRoot {
-		t.Fatalf("attachment_folder = %q, want %q", cfg.Build.AttachmentFolder, DefaultAssetsRoot)
-	}
-	if cfg.Build.AssetsRoot != DefaultAssetsRoot {
-		t.Fatalf("assets_root = %q, want %q", cfg.Build.AssetsRoot, DefaultAssetsRoot)
-	}
-}
-
-func TestResolveAttachmentFolderDefaultsToVaultAssets(t *testing.T) {
+func TestResolveAttachmentFolderEmptyByDefault(t *testing.T) {
 	vault := t.TempDir()
-	assets := filepath.Join(vault, "assets")
-	if err := os.MkdirAll(assets, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	cfg := Default()
 	cfg.VaultRoot = vault
 	if err := cfg.Resolve(ConfigPath(vault)); err != nil {
 		t.Fatal(err)
 	}
-	got := cfg.ResolveAttachmentFolderAbs()
-	want := filepath.Join(vault, "assets")
-	if got != want {
-		t.Fatalf("ResolveAttachmentFolderAbs() = %q, want %q", got, want)
+	if got := cfg.ResolveAttachmentFolderAbs(); got != "" {
+		t.Fatalf("ResolveAttachmentFolderAbs() = %q, want empty", got)
 	}
 }

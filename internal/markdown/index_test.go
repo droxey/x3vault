@@ -81,6 +81,37 @@ func TestResolveAssetFromObsidianAttachmentFolder(t *testing.T) {
 	}
 }
 
+func TestResolveAssetFromExcludedRawAttachmentFolder(t *testing.T) {
+	dir := t.TempDir()
+	wiki := filepath.Join(dir, "wiki", "entities")
+	attach := filepath.Join(dir, "raw", "assets")
+	if err := os.MkdirAll(wiki, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(attach, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(attach, "paper.pdf"), []byte("%PDF"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	asset, err := resolveAsset("paper.pdf", "entities", NormalizeOpts{
+		VaultRoot:              dir,
+		SourceRoot:             filepath.Join(dir, "wiki"),
+		SourceRel:              "wiki",
+		AttachmentFolder:       attach,
+		IsExcludedVaultPath:    cfg.IsExcludedVaultPath,
+		ShouldIncludeSourceRel: cfg.Wiki.ShouldIncludeRelPath,
+	})
+	if err != nil {
+		t.Fatalf("resolveAsset: %v", err)
+	}
+	if asset.SourceAbs != filepath.Join(attach, "paper.pdf") {
+		t.Fatalf("SourceAbs = %q", asset.SourceAbs)
+	}
+}
+
 func TestResolveAssetSkipsIgnoredDirectory(t *testing.T) {
 	dir := t.TempDir()
 	wiki := filepath.Join(dir, "wiki", "entities")
