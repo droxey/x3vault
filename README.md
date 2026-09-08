@@ -4,23 +4,213 @@ Read Obsidian LLM Wiki content and sync it to **XTEINK e-readers** (X3, X4, and 
 
 Canonical repo: [github.com/droxey/x3vault](https://github.com/droxey/x3vault)
 
-All build output is **markdown for on-device reading**: wikilinks become relative links, titles render as `#` headings, Obsidian-only syntax is stripped, and images use XTE-friendly formats (PNG/JPEG/GIF).
+Build output is **markdown for on-device reading**: wikilinks become relative links, titles render as `#` headings, Obsidian-only syntax is stripped, and images use XTE-friendly formats (PNG/JPEG/GIF).
 
-## Status
+## Install
 
-- [x] Configurable vault layout, build, sync, and device settings
-- [x] Config + discovery (`all_except_ignored` dir mode)
-- [x] Markdown normalize for XTE e-readers + Obsidian attachment folder
-- [x] Alias-aware wikilink index (duplicate keys pick last)
-- [x] Deterministic build staging under `../ereader/build` (alongside vault)
-- [x] Witch HTTP transport + ownership + content-hash sync (fail-fast)
-- [x] CLI: device init / sync / dry-run / config
+**Requirements**
+
+- Go **1.22+** ([`go.mod`](go.mod) pins `1.22.2`)
+- An Obsidian vault with a `wiki/` source tree (LLM Wiki layout)
+- For device sync: XTE on **File Transfer / Wi-Fi** (Witch Reader transfer screen)
+
+**Build from source**
+
+```bash
+git clone https://github.com/droxey/x3vault.git
+cd x3vault
+go build -o bin/x3vault ./cmd/x3vault
+```
+
+Optional: install on your `PATH`:
+
+```bash
+go install ./cmd/x3vault   # installs to $(go env GOPATH)/bin/x3vault
+```
+
+**First-time vault setup**
+
+```bash
+./bin/x3vault init --vault /path/to/llmwiki-vault
+```
+
+Creates `{vault}/.xte/config.yaml` and prints default paths. Requires `{vault}/wiki/` to exist. Does nothing if config already exists (exit 0).
 
 ## Quick start
 
-Build copies every discovered wiki note (normalized for XTE e-reader viewing) and **every referenced attachment** into `../ereader/build/current/assets/`. Sync mirrors the build tree to the device at `/ereader`. The Obsidian vault is never modified.
+```bash
+export VAULT=/path/to/llmwiki-vault
 
-### Output layout
+./bin/x3vault build --vault "$VAULT"
+./bin/x3vault doctor --vault "$VAULT"          # check vault + device
+
+# XTE on File Transfer / Wi-Fi:
+./bin/x3vault device init --vault "$VAULT"     # once per device root
+./bin/x3vault sync --dry-run --vault "$VAULT"  # preview plan
+./bin/x3vault sync --vault "$VAULT"            # upload build/current → device
+```
+
+Build copies every discovered wiki note and **every referenced attachment** into `../ereader/build/current/`. Sync mirrors that tree to `/ereader` on the device. The Obsidian vault is never modified.
+
+## Usage
+
+### Global flags
+
+| Flag | Commands | Description |
+|------|----------|-------------|
+| `--vault PATH` | all except `init` (required there) | Vault root. Default: current directory or path from config. |
+| `--dry-run` | `sync` | Print upload/delete plan; do not change the device. |
+| `--json` | `build`, `device init`, `sync`, `doctor`, `status` | JSON result on stdout (schema in `internal/contract/result.go`). |
+
+**Help**
+
+```bash
+./bin/x3vault help
+./bin/x3vault --help
+```
+
+### Commands
+
+#### `init` — create default config
+
+```bash
+x3vault init --vault PATH
+```
+
+Writes `{vault}/.xte/config.yaml`. Warns if standard LLM Wiki folders are missing. Exit **2** if `--vault` or `wiki/` is missing.
+
+#### `build` — normalize wiki and copy attachments
+
+```bash
+x3vault build [--vault PATH] [--json]
+```
+
+- Discovers notes under `source_root` (default `wiki/`)
+- Normalizes markdown for XTE e-readers
+- Copies referenced attachments to `{build_root}/current/assets/`
+- Backs up prior `{build_root}/current/` → `{build_root}/backup/` before building; restores backup if the build fails
+
+Exit **2** config error · **3** discovery/build error
+
+#### `device init` — claim device directory
+
+```bash
+x3vault device init [--vault PATH] [--json]
+```
+
+Creates `{device.root}/_meta/ownership.json` on the XTE (default root `/ereader`). Run once before first sync. Device must be on File Transfer / Wi-Fi.
+
+Exit **2** config · **4** device unreachable · **5** init failed
+
+#### `sync` — mirror build output to device
+
+```bash
+x3vault sync [--vault PATH] [--dry-run] [--json]
+```
+
+Uploads `{build_root}/current/` to `{device.root}`. Uses content-hash manifest when enabled. Deletes remote files/dirs not present locally (under owned root only).
+
+Exit **2** config · **3** no local build · **4** device/sync error · **5** plan error
+
+#### `doctor` / `status` — inspect vault and device
+
+```bash
+x3vault doctor [--vault PATH] [--json]
+x3vault status [--vault PATH] [--json]   # alias for doctor
+```
+
+Prints vault paths, note count, build `current/` / `backup/` status, sync settings, and device connectivity.
+
+Exit **2** config · **3** discovery error
+
+#### `config` — view or edit settings
+
+```bash
+x3vault config show [--vault PATH]
+x3vault config restore [--vault PATH]     # reset defaults; keeps vault_root
+```
+
+**Wiki directory rules** (under `source_root`):
+
+```bash
+x3vault config dirs [--vault PATH]                    # show rules
+x3vault config dirs restore [--vault PATH]            # reset to defaults
+x3vault config dirs ignore DIR... [--vault PATH]      # exclude folders
+x3vault config dirs unignore DIR... [--vault PATH]
+x3vault config dirs allow DIR... [--vault PATH]       # switch to whitelist mode
+x3vault config dirs unallow DIR... [--vault PATH]
+```
+
+`config show` and `config restore` print YAML to **stdout**. Other config commands print status to stderr.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Unexpected fatal error |
+| 2 | Usage / config error |
+| 3 | Vault discovery or build error |
+| 4 | Device unreachable or sync failed |
+| 5 | Device init or sync plan error |
+
+With `--json`, result JSON is written to stdout. On failure, errors and warnings also print to stderr.
+
+### Device connectivity
+
+If `crosspoint.local` does not resolve, set the IP from the XTE File Transfer screen:
+
+```yaml
+# {vault}/.xte/config.yaml
+device:
+  base_url: http://192.168.x.x
+```
+
+Then re-run `doctor` before `device init` or `sync`.
+
+## Testing
+
+**Run all tests**
+
+```bash
+go test ./... -count=1
+```
+
+**Run tests for one package**
+
+```bash
+go test ./internal/build/... -v
+go test ./internal/markdown/... -v
+go test ./internal/config/... -v
+go test ./internal/sync/... -v
+```
+
+**Verify the CLI builds**
+
+```bash
+go build -o bin/x3vault ./cmd/x3vault
+```
+
+**CI**
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
+
+- `go test ./... -count=1`
+- `go build -o bin/x3vault ./cmd/x3vault`
+
+**Manual smoke test** (no device required)
+
+```bash
+TMP=$(mktemp -d)
+mkdir -p "$TMP/vault/wiki"
+echo '# Index' > "$TMP/vault/wiki/index.md"
+./bin/x3vault init --vault "$TMP/vault"
+./bin/x3vault build --vault "$TMP/vault"
+./bin/x3vault doctor --vault "$TMP/vault"
+ls -R "$(dirname "$TMP")/ereader/build/current"
+```
+
+## Output layout
 
 For vault at `/path/to/llmwiki-vault/`:
 
@@ -38,23 +228,11 @@ For vault at `/path/to/llmwiki-vault/`:
 
 Each `build` renames `current/` → `backup/` first, then writes a new `current/`. If the build fails, the previous `current/` is restored from `backup/` automatically.
 
-`build_root` may be set to any path **outside** the Obsidian vault.
-
-```bash
-go build -o bin/x3vault ./cmd/x3vault
-
-./bin/x3vault init --vault /path/to/llmwiki-vault
-./bin/x3vault build --vault /path/to/llmwiki-vault
-
-# XTE on File Transfer / Wi-Fi screen:
-./bin/x3vault device init --vault /path/to/llmwiki-vault
-./bin/x3vault sync --dry-run --vault /path/to/llmwiki-vault
-./bin/x3vault sync --vault /path/to/llmwiki-vault
-```
+`build_root` may be set to any path **outside** the Obsidian vault. It must not lie inside the vault or its subfolders (including `wiki/`, `.obsidian/`, etc.).
 
 ## LLM Wiki layout
 
-Standard folders (init warns if missing):
+Standard folders (`init` warns if missing):
 
 ```
 wiki/
@@ -71,7 +249,7 @@ wiki/
 
 ## Attachments
 
-Every referenced attachment — `![[file]]` embeds, `[[file.pdf]]` wikilinks, and inline `[text](file.pdf)` links — is **copied into** `ereader/build/current/assets/` during build. Notes in `ereader/build/current/wiki/` link to those copied files.
+Every referenced attachment — `![[file]]` embeds, `[[file.pdf]]` wikilinks, and inline `[text](file.pdf)` links — is **copied into** `ereader/build/current/assets/` during build.
 
 **Where x3vault looks in the vault** (first match wins):
 
@@ -87,31 +265,11 @@ Every referenced attachment — `![[file]]` embeds, `[[file.pdf]]` wikilinks, an
 }
 ```
 
-**Override in config:**
-
-```yaml
-build:
-  assets_root: assets              # output folder under build/current/
-  attachment_folder: attachments   # optional vault source override
-  read_obsidian_config: true
-```
-
-**Not copied:** files under ignored wiki dirs (`script/`, `references/`) or other excluded vault paths, even when linked from a note.
-
-If attachment resolution fails, `build` prints warnings and leaves broken links — check stderr after `x3vault build`.
-
-```bash
-./bin/x3vault config show                            # full config YAML
-./bin/x3vault config restore                         # reset defaults (keeps vault_root)
-./bin/x3vault config dirs                            # show wiki dir rules
-./bin/x3vault config dirs ignore drafts              # exclude a folder
-./bin/x3vault config dirs unignore drafts
-./bin/x3vault config dirs restore                    # reset wiki dir defaults
-```
+**Not copied:** files under ignored wiki dirs (`script/`, `references/`) or excluded vault paths, even when linked from a note. Failed resolution prints warnings on stderr during `build`.
 
 ## Config reference
 
-All settings live in `.xte/config.yaml` inside the vault (legacy `.ereader.yaml`, `.xte.yaml`, and `.x3vault.yaml` at vault root are still read if present).
+All settings live in `.xte/config.yaml` inside the vault. Legacy `.ereader.yaml`, `.xte.yaml`, and `.x3vault.yaml` at vault root are still read if present.
 
 ```yaml
 schema: 1
@@ -152,24 +310,9 @@ device:
   ownership_tool: ereader      # written to _meta/ownership.json
 ```
 
-## Sync
+## Sync behavior
 
 Sync compares **SHA-256 content hashes** when `sync.hash_manifest` is enabled. After a successful sync, x3vault writes `{device.root}/_meta/file-hashes.json` on the device. Sync **fails fast** on the first error when `sync.fail_fast` is true. Empty remote directories are removed when `sync.clean_empty_dirs` is true.
-
-### Device workflow
-
-1. Put the XTE on **File Transfer / Wi-Fi** (Witch Reader transfer screen).
-2. Check connectivity: `./bin/x3vault doctor --vault PATH`
-3. First sync setup: `./bin/x3vault device init --vault PATH`
-4. Preview changes: `./bin/x3vault sync --dry-run --vault PATH`
-5. Sync build output: `./bin/x3vault sync --vault PATH`
-
-If `crosspoint.local` does not resolve on your network, set the IP shown on the device screen:
-
-```yaml
-device:
-  base_url: http://192.168.x.x
-```
 
 ## Safety
 
