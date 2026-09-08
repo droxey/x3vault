@@ -13,8 +13,27 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
-      - name: Test
-        run: go test ./... -count=1
-      - name: Build
-        run: go build -o bin/x3vault ./cmd/x3vault
+          go-version: "1.25"
+          cache: true
+      - name: Verify go.mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: Vet
+        run: go vet ./...
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@v0.6.1
+      - name: Staticcheck
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          staticcheck ./...
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      - name: Govulncheck
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          govulncheck ./...
+      - name: Test with race detector
+        run: go test ./... -count=1 -race
+      - name: Smoke test
+        run: bash scripts/smoke.sh

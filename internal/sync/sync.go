@@ -1,10 +1,12 @@
 package sync
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -48,7 +50,7 @@ type SyncResult struct {
 	Errors   []string
 }
 
-func DeviceInit(t *Transport, root, tool string) error {
+func DeviceInit(ctx context.Context, t FileTransport, root, tool string) error {
 	root = path.Clean(root)
 	if root == "" || root == "/" {
 		return fmt.Errorf("device root must be an absolute path (e.g. %s)", config.DefaultDeviceRoot)
@@ -56,13 +58,13 @@ func DeviceInit(t *Transport, root, tool string) error {
 	if !strings.HasPrefix(root, "/") {
 		return fmt.Errorf("device root must start with / (got %q)", root)
 	}
-	if err := ensureDeviceRoot(t, root); err != nil {
+	if err := ensureDeviceRoot(ctx, t, root); err != nil {
 		return fmt.Errorf("ensure device root: %w", err)
 	}
 	if tool == "" {
 		tool = config.DefaultOwnershipTool
 	}
-	metaEntries, err := t.List(root + "/_meta")
+	metaEntries, err := t.List(ctx, root+"/_meta")
 	owned := false
 	if err == nil {
 		for _, e := range metaEntries {
@@ -73,7 +75,7 @@ func DeviceInit(t *Transport, root, tool string) error {
 		}
 	}
 	if !owned {
-		rootEntries, err := t.List(root)
+		rootEntries, err := t.List(ctx, root)
 		if err == nil && len(rootEntries) > 0 {
 			for _, e := range rootEntries {
 				if e.Name != "_meta" {
@@ -81,7 +83,7 @@ func DeviceInit(t *Transport, root, tool string) error {
 				}
 			}
 		}
-		if err := t.Mkdir(root, "_meta"); err != nil {
+		if err := t.Mkdir(ctx, root, "_meta"); err != nil {
 			return err
 		}
 		own := Ownership{
@@ -90,22 +92,25 @@ func DeviceInit(t *Transport, root, tool string) error {
 			CreatedAt: time.Now().UTC().Format(time.RFC3339),
 			Root:      root,
 		}
-		data, _ := json.MarshalIndent(own, "", "  ")
-		if err := t.Upload(root+"/_meta", "ownership.json", data); err != nil {
+		data, err := json.MarshalIndent(own, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal ownership marker: %w", err)
+		}
+		if err := t.Upload(ctx, root+"/_meta", "ownership.json", data); err != nil {
 			return fmt.Errorf("write ownership marker: %w", err)
 		}
 	}
 	return nil
 }
 
-func ensureDeviceRoot(t *Transport, root string) error {
+func ensureDeviceRoot(ctx context.Context, t FileTransport, root string) error {
 	parts := strings.Split(strings.Trim(root, "/"), "/")
 	cur := "/"
 	for _, part := range parts {
 		if part == "" {
 			continue
 		}
-		entries, err := t.List(cur)
+		entries, err := t.List(ctx, cur)
 		if err != nil {
 			return err
 		}
@@ -117,7 +122,7 @@ func ensureDeviceRoot(t *Transport, root string) error {
 			}
 		}
 		if !exists {
-			if err := t.Mkdir(cur, part); err != nil {
+			if err := t.Mkdir(ctx, cur, part); err != nil {
 				return err
 			}
 		}
@@ -126,10 +131,10 @@ func ensureDeviceRoot(t *Transport, root string) error {
 	return nil
 }
 
-func HasOwnership(t *Transport, root string) (bool, error) {
-	entries, err := t.List(root + "/_meta")
+func HasOwnership(ctx context.Context, t FileTransport, root string) (bool, error) {
+	entries, err := t.List(ctx, root+"/_meta")
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("list _meta: %w", err)
 	}
 	for _, e := range entries {
 		if e.Name == "ownership.json" && !e.IsDirectory {
@@ -139,9 +144,9 @@ func HasOwnership(t *Transport, root string) (bool, error) {
 	return false, nil
 }
 
-func BuildPlan(t *Transport, root, localCurrent string, opts Options) (*Plan, error) {
+func BuildPlan(ctx context.Context, t FileTransport, root, localCurrent string, opts Options) (*Plan, error) {
 	root = path.Clean(root)
-	owned, err := HasOwnership(t, root)
+	owned, err := HasOwnership(ctx, t, root)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +158,7 @@ func BuildPlan(t *Transport, root, localCurrent string, opts Options) (*Plan, er
 	if err != nil {
 		return nil, fmt.Errorf("hash local build: %w", err)
 	}
-	remoteManifest, err := LoadRemoteHashManifest(t, root)
+	remoteManifest, err := LoadRemoteHashManifest(ctx, t, root)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +167,7 @@ func BuildPlan(t *Transport, root, localCurrent string, opts Options) (*Plan, er
 	remoteDirs := map[string]bool{}
 	var walkRemote func(dir string) error
 	walkRemote = func(dir string) error {
-		entries, err := t.List(dir)
+		entries, err := t.List(ctx, dir)
 		if err != nil {
 			return err
 		}
@@ -191,7 +196,7 @@ func BuildPlan(t *Transport, root, localCurrent string, opts Options) (*Plan, er
 	}
 	var uploadRels []string
 	for rel, localHash := range localHashes {
-		if needsUpload(t, root, rel, localHash, localCurrent, remoteFiles, remoteManifest, opts) {
+		if needsUpload(ctx, t, root, rel, localHash, localCurrent, remoteFiles, remoteManifest, opts) {
 			uploadRels = append(uploadRels, rel)
 		}
 	}
@@ -310,7 +315,7 @@ func hasUndeletedSubdir(dir string, dirs, deleting map[string]bool) bool {
 	return false
 }
 
-func needsUpload(t *Transport, root, rel, localHash, localCurrent string, remoteFiles map[string]int64, remoteManifest *HashManifest, opts Options) bool {
+func needsUpload(ctx context.Context, t FileTransport, root, rel, localHash, localCurrent string, remoteFiles map[string]int64, remoteManifest *HashManifest, opts Options) bool {
 	if opts.HashManifest {
 		if remoteHash, ok := remoteManifest.Files[rel]; ok && remoteHash == localHash {
 			return false
@@ -325,7 +330,10 @@ func needsUpload(t *Transport, root, rel, localHash, localCurrent string, remote
 	if err != nil || info.Size() != rsize {
 		return true
 	}
-	remoteData, err := t.ReadFile(path.Join(root, rel))
+	if t == nil {
+		return true
+	}
+	remoteData, err := t.ReadFile(ctx, path.Join(root, rel))
 	if err != nil {
 		return true
 	}
@@ -333,8 +341,12 @@ func needsUpload(t *Transport, root, rel, localHash, localCurrent string, remote
 	return hex.EncodeToString(sum[:]) != localHash
 }
 
-func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool, opts Options) *SyncResult {
+func ApplyPlan(ctx context.Context, t FileTransport, plan *Plan, localCurrent string, dryRun bool, opts Options) *SyncResult {
 	res := &SyncResult{}
+	progress := opts.Progress
+	if progress == nil {
+		progress = io.Discard
+	}
 	root := path.Clean(opts.DeviceRoot)
 	seenDir := map[string]bool{}
 	var dirs []string
@@ -349,7 +361,7 @@ func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool, opts 
 	})
 	for _, d := range dirs {
 		if dryRun {
-			fmt.Fprintf(os.Stderr, "  mkdir %s\n", d)
+			fmt.Fprintf(progress, "  mkdir %s\n", d)
 			continue
 		}
 		parent, name := path.Split(strings.TrimSuffix(d, "/"))
@@ -357,7 +369,7 @@ func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool, opts 
 		if parent == "" {
 			parent = "/"
 		}
-		if err := t.Mkdir(parent, name); err != nil {
+		if err := t.Mkdir(ctx, parent, name); err != nil {
 			if res.onError(opts, fmt.Sprintf("mkdir %s: %v", d, err)) {
 				return res
 			}
@@ -372,7 +384,7 @@ func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool, opts 
 		}
 		localPath := filepath.Join(localCurrent, filepath.FromSlash(rel))
 		if dryRun {
-			fmt.Fprintf(os.Stderr, "  upload %s (%d bytes)\n", op.Path, op.Size)
+			fmt.Fprintf(progress, "  upload %s (%d bytes)\n", op.Path, op.Size)
 			res.Uploaded++
 			continue
 		}
@@ -385,14 +397,14 @@ func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool, opts 
 		}
 		dir := path.Dir(op.Path)
 		name := path.Base(op.Path)
-		if err := t.Upload(dir, name, data); err != nil {
+		if err := t.Upload(ctx, dir, name, data); err != nil {
 			if res.onError(opts, fmt.Sprintf("upload %s: %v", op.Path, err)) {
 				return res
 			}
 			continue
 		}
 		res.Uploaded++
-		fmt.Fprintf(os.Stderr, "  uploaded %s\n", op.Path)
+		fmt.Fprintf(progress, "  uploaded %s\n", op.Path)
 	}
 	var fileDeletes, dirDeletes []PlanOp
 	for _, op := range plan.Deletes {
@@ -404,39 +416,39 @@ func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool, opts 
 	}
 	for _, op := range fileDeletes {
 		if dryRun {
-			fmt.Fprintf(os.Stderr, "  delete %s\n", op.Path)
+			fmt.Fprintf(progress, "  delete %s\n", op.Path)
 			res.Deleted++
 			continue
 		}
-		if err := t.Delete(op.Path, op.Type); err != nil {
+		if err := t.Delete(ctx, op.Path, op.Type); err != nil {
 			if res.onError(opts, fmt.Sprintf("delete %s: %v", op.Path, err)) {
 				return res
 			}
 			continue
 		}
 		res.Deleted++
-		fmt.Fprintf(os.Stderr, "  deleted %s\n", op.Path)
+		fmt.Fprintf(progress, "  deleted %s\n", op.Path)
 	}
 	sort.Slice(dirDeletes, func(i, j int) bool {
 		return strings.Count(dirDeletes[i].Path, "/") > strings.Count(dirDeletes[j].Path, "/")
 	})
 	for _, op := range dirDeletes {
 		if dryRun {
-			fmt.Fprintf(os.Stderr, "  rmdir %s\n", op.Path)
+			fmt.Fprintf(progress, "  rmdir %s\n", op.Path)
 			res.Deleted++
 			continue
 		}
-		if err := t.Delete(op.Path, op.Type); err != nil {
+		if err := t.Delete(ctx, op.Path, op.Type); err != nil {
 			if res.onError(opts, fmt.Sprintf("rmdir %s: %v", op.Path, err)) {
 				return res
 			}
 			continue
 		}
 		res.Deleted++
-		fmt.Fprintf(os.Stderr, "  rmdir %s\n", op.Path)
+		fmt.Fprintf(progress, "  rmdir %s\n", op.Path)
 	}
 	if !dryRun && len(res.Errors) == 0 && opts.HashManifest {
-		if err := writeHashManifest(t, root, localCurrent); err != nil {
+		if err := writeHashManifest(ctx, t, root, localCurrent); err != nil {
 			if res.onError(opts, fmt.Sprintf("update hash manifest: %v", err)) {
 				return res
 			}
@@ -450,7 +462,7 @@ func (res *SyncResult) onError(opts Options, msg string) bool {
 	return opts.FailFast
 }
 
-func writeHashManifest(t *Transport, root, localCurrent string) error {
+func writeHashManifest(ctx context.Context, t FileTransport, root, localCurrent string) error {
 	hashes, err := HashLocalTree(localCurrent)
 	if err != nil {
 		return err
@@ -460,5 +472,5 @@ func writeHashManifest(t *Transport, root, localCurrent string) error {
 	if err != nil {
 		return err
 	}
-	return t.Upload(root+"/_meta", "file-hashes.json", data)
+	return t.Upload(ctx, root+"/_meta", "file-hashes.json", data)
 }

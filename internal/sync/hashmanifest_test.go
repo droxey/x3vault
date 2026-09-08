@@ -1,16 +1,19 @@
 package sync
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestNeedsUploadUsesManifest(t *testing.T) {
 	opts := Options{HashManifest: true}
 	manifest := &HashManifest{Files: map[string]string{
 		"wiki/index.md": "abc",
 	}}
-	if needsUpload(nil, "/ereader", "wiki/index.md", "abc", "", map[string]int64{"wiki/index.md": 10}, manifest, opts) {
+	if needsUpload(context.Background(), nil, "/ereader", "wiki/index.md", "abc", "", map[string]int64{"wiki/index.md": 10}, manifest, opts) {
 		t.Fatal("expected skip when manifest hash matches")
 	}
-	if !needsUpload(nil, "/ereader", "wiki/index.md", "def", "", map[string]int64{"wiki/index.md": 10}, manifest, opts) {
+	if !needsUpload(context.Background(), nil, "/ereader", "wiki/index.md", "def", "", map[string]int64{"wiki/index.md": 10}, manifest, opts) {
 		t.Fatal("expected upload when manifest hash differs")
 	}
 }

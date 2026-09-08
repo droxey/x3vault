@@ -45,7 +45,7 @@ func TestRunCopiesReferencedAttachmentsToBuildAssets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := Run(cfg, disc)
+	res, err := Run(cfg, disc, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestRunBacksUpPreviousCurrentBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Run(cfg, disc); err != nil {
+	if _, err := Run(cfg, disc, RunOptions{}); err != nil {
 		t.Fatal(err)
 	}
 

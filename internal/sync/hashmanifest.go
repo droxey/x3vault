@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -85,9 +86,9 @@ func ParseHashManifest(data []byte) (*HashManifest, error) {
 	return &m, nil
 }
 
-func LoadRemoteHashManifest(t *Transport, root string) (*HashManifest, error) {
+func LoadRemoteHashManifest(ctx context.Context, t FileTransport, root string) (*HashManifest, error) {
 	path := pathJoin(root, HashManifestPath)
-	data, err := t.ReadFile(path)
+	data, err := t.ReadFile(ctx, path)
 	if err != nil {
 		return NewHashManifest(), nil
 	}
