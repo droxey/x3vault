@@ -182,7 +182,7 @@ go test ./... -count=1
 go test ./internal/build/... -v
 go test ./internal/markdown/... -v
 go test ./internal/config/... -v
-go test ./internal/sync/... -v
+go test ./internal/sync/... -v   # includes mock device init + sync
 ```
 
 **Verify the CLI builds**
@@ -197,8 +197,15 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
 
 - `go test ./... -count=1`
 - `go build -o bin/x3vault ./cmd/x3vault`
+- `bash scripts/smoke.sh` — end-to-end `init` → `build` → `doctor`
 
-**Manual smoke test** (no device required)
+**Smoke test** (no device required)
+
+```bash
+bash scripts/smoke.sh
+```
+
+Or manually:
 
 ```bash
 TMP=$(mktemp -d)
