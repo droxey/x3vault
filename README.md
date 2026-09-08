@@ -110,6 +110,7 @@ sync:
     - raw
     - .obsidian
     - .git
+    - .xte
 
 device:
   base_url: http://crosspoint.local
