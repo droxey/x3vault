@@ -156,21 +156,24 @@ device:
 
 Sync compares **SHA-256 content hashes** when `sync.hash_manifest` is enabled. After a successful sync, x3vault writes `{device.root}/_meta/file-hashes.json` on the device. Sync **fails fast** on the first error when `sync.fail_fast` is true. Empty remote directories are removed when `sync.clean_empty_dirs` is true.
 
+### Device workflow
+
+1. Put the XTE on **File Transfer / Wi-Fi** (Witch Reader transfer screen).
+2. Check connectivity: `./bin/x3vault doctor --vault PATH`
+3. First sync setup: `./bin/x3vault device init --vault PATH`
+4. Preview changes: `./bin/x3vault sync --dry-run --vault PATH`
+5. Sync build output: `./bin/x3vault sync --vault PATH`
+
+If `crosspoint.local` does not resolve on your network, set the IP shown on the device screen:
+
+```yaml
+device:
+  base_url: http://192.168.x.x
+```
+
 ## Safety
 
 - **Obsidian vault is read-only.** x3vault never modifies `wiki/`, attachments, or `.obsidian/`. Build output lives in `build_root/` (default `../ereader/build/current/`), outside the vault.
 - One-way only. The only program write inside the vault is `.xte/config.yaml` (via `init` / `config` commands).
 - Deletes only under the configured owned `device.root` after ownership marker is present.
 - `_meta/` is never deleted by sync.
-
-## Reviewer notes
-
-**Goal:** Read Obsidian LLM Wiki from the vault and sync normalized output to XTEINK X3/X4 for further reading on-device.
-
-**Merge with `main`:** Conflicts resolved in favor of this branch's `all_except_ignored` directory policy (main's merged PR #1 used whitelist-by-default `allowed_dirs`). Custom wiki folders sync automatically without `config dirs allow`.
-
-**Paths:** Program config in `.xte/config.yaml` (vault root). Build output default `../ereader/build` (sibling folder). `build_root` must stay outside the vault. Legacy root-level config files still loaded.
-
-**Obsidian vault:** Never modified. Build copies all discovered wiki notes and referenced attachments to `../ereader/build/current/`; sync mirrors to the device.
-
-**Output format:** All device markdown is normalized for XTE e-reader screens (visible `#` titles, stripped Obsidian syntax, PNG/JPEG/GIF images; SVG/WebP linked with warnings).

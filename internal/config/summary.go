@@ -6,7 +6,7 @@ import (
 
 func FormatWikiDirsSummary(w WikiDirs) string {
 	var b strings.Builder
-	b.WriteString("Wiki directory rules for github.com/droxey/x3vault (relative to wiki/):\n\n")
+	b.WriteString("Wiki directory rules (relative to wiki/):\n\n")
 	b.WriteString("mode: ")
 	b.WriteString(w.Mode)
 	b.WriteString("\n\n")

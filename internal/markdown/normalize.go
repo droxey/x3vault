@@ -17,7 +17,6 @@ var (
 	reEmbed       = regexp.MustCompile(`!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]`)
 	reComment     = regexp.MustCompile(`%%[\s\S]*?%%`)
 	reFrontmatter = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n?`)
-	reInlineTag   = regexp.MustCompile(`(?:^|\s)#([a-zA-Z0-9_/-]+)`)
 )
 
 type AssetRef struct {
