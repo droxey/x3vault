@@ -53,7 +53,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprint(os.Stderr, `x3vault — slim v0: build + exact-mirror sync of Obsidian wiki/ to XTEINK X3
+	fmt.Fprint(os.Stderr, `x3vault — slim v0: build Obsidian wiki for XTE e-readers, sync to XTEINK
 
 Usage:
   x3vault init --vault PATH
@@ -112,7 +112,7 @@ func configPath(vault string) string {
 		cwd, _ := os.Getwd()
 		vault = cwd
 	}
-	return filepath.Join(vault, ".x3vault.yaml")
+	return config.ResolveConfigPath(vault)
 }
 
 func runInit(args []string) {
@@ -125,7 +125,7 @@ func runInit(args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	cfgPath := filepath.Join(abs, ".x3vault.yaml")
+	cfgPath := config.ConfigPath(abs)
 	if _, err := os.Stat(cfgPath); err == nil {
 		fmt.Fprintf(os.Stderr, "config already exists: %s\n", cfgPath)
 		os.Exit(0)

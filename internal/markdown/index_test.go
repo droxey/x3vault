@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/droxey/x3vault/internal/config"
 )
 
 func TestBuildNoteIndexAliases(t *testing.T) {
@@ -76,6 +78,31 @@ func TestResolveAssetFromObsidianAttachmentFolder(t *testing.T) {
 	}
 	if asset.SourceAbs != filepath.Join(attach, "diagram.png") {
 		t.Fatalf("SourceAbs = %q", asset.SourceAbs)
+	}
+}
+
+func TestResolveAssetSkipsIgnoredDirectory(t *testing.T) {
+	dir := t.TempDir()
+	wiki := filepath.Join(dir, "wiki", "entities")
+	ignored := filepath.Join(dir, "wiki", "script")
+	if err := os.MkdirAll(wiki, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(ignored, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ignored, "secret.png"), []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wikiDirs := config.DefaultWikiDirs()
+	_, err := resolveAsset("script/secret.png", "entities", NormalizeOpts{
+		VaultRoot:              dir,
+		SourceRoot:             filepath.Join(dir, "wiki"),
+		ShouldIncludeSourceRel: wikiDirs.ShouldIncludeRelPath,
+	})
+	if err == nil {
+		t.Fatal("expected asset in ignored directory to be rejected")
 	}
 }
 

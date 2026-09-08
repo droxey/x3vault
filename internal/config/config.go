@@ -12,6 +12,17 @@ import (
 
 const SchemaVersion = 1
 
+// Tool paths and device defaults.
+const (
+	ConfigFileName           = ".ereader.yaml"
+	LegacyXTEConfigFileName  = ".xte.yaml"
+	LegacyConfigFileName     = ".x3vault.yaml"
+	EreaderDirName           = "ereader"
+	DefaultBuildRootRel      = "../ereader/build"
+	DefaultDeviceRoot        = "/ereader"
+	DefaultOwnershipTool     = "ereader"
+)
+
 type BuildConfig struct {
 	AssetsRoot         string `yaml:"assets_root"`
 	AttachmentFolder   string `yaml:"attachment_folder"`
@@ -64,9 +75,9 @@ func DefaultSync() SyncConfig {
 func DefaultDevice() DeviceConfig {
 	return DeviceConfig{
 		BaseURL:        "http://crosspoint.local",
-		Root:           "/x3vault",
+		Root:           DefaultDeviceRoot,
 		TimeoutSeconds: 60,
-		OwnershipTool:  "x3vault",
+		OwnershipTool:  DefaultOwnershipTool,
 	}
 }
 
@@ -75,7 +86,7 @@ func Default() *Config {
 		Schema:     SchemaVersion,
 		VaultRoot:  ".",
 		SourceRoot: "wiki",
-		BuildRoot:  ".x3vault/build",
+		BuildRoot:  DefaultBuildRootRel,
 		EPUB:       false,
 		Wiki:       DefaultWikiDirs(),
 		Build:      DefaultBuild(),
@@ -177,7 +188,7 @@ func validateRelPath(p, field string) error {
 func validateDeviceRoot(root string) error {
 	root = cleanDeviceRoot(root)
 	if root == "" || root == "/" {
-		return fmt.Errorf("device.root must be an absolute device path (e.g. /x3vault)")
+		return fmt.Errorf("device.root must be an absolute device path (e.g. %s)", DefaultDeviceRoot)
 	}
 	if !strings.HasPrefix(root, "/") {
 		return fmt.Errorf("device.root must start with / (got %q)", root)
@@ -234,7 +245,28 @@ func (c *Config) Resolve(configPath string) error {
 	if !filepath.IsAbs(c.BuildRoot) {
 		c.BuildRoot = filepath.Join(c.VaultRoot, c.BuildRoot)
 	}
+	buildAbs, err := filepath.Abs(c.BuildRoot)
+	if err != nil {
+		return fmt.Errorf("build_root abs: %w", err)
+	}
+	c.BuildRoot = buildAbs
 	return nil
+}
+
+func ConfigPath(vaultRoot string) string {
+	return filepath.Join(vaultRoot, ConfigFileName)
+}
+
+// ResolveConfigPath returns the config file to use, preferring .ereader.yaml with
+// fallbacks to legacy .xte.yaml and .x3vault.yaml when present.
+func ResolveConfigPath(vaultRoot string) string {
+	for _, name := range []string{ConfigFileName, LegacyXTEConfigFileName, LegacyConfigFileName} {
+		p := filepath.Join(vaultRoot, name)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ConfigPath(vaultRoot)
 }
 
 func (c *Config) SourceDir() string {

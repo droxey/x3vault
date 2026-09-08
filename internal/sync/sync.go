@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/droxey/x3vault/internal/config"
 )
 
 const (
@@ -49,7 +51,7 @@ type SyncResult struct {
 func DeviceInit(t *Transport, root, tool string) error {
 	root = path.Clean(root)
 	if root == "" || root == "/" {
-		return fmt.Errorf("device root must be an absolute path (e.g. /x3vault)")
+		return fmt.Errorf("device root must be an absolute path (e.g. %s)", config.DefaultDeviceRoot)
 	}
 	if !strings.HasPrefix(root, "/") {
 		return fmt.Errorf("device root must start with / (got %q)", root)
@@ -58,7 +60,7 @@ func DeviceInit(t *Transport, root, tool string) error {
 		return fmt.Errorf("ensure device root: %w", err)
 	}
 	if tool == "" {
-		tool = "x3vault"
+		tool = config.DefaultOwnershipTool
 	}
 	metaEntries, err := t.List(root + "/_meta")
 	owned := false
