@@ -34,15 +34,17 @@ var LLMWikiDefaults = WikiDirs{
 // Default mode syncs all subdirectories except ignored_dirs. Root-level *.md is always included.
 // raw/ is never synced (outside source_root).
 type WikiDirs struct {
-	Mode    string   `yaml:"mode"`
-	Allowed []string `yaml:"allowed_dirs,omitempty"`
-	Ignored []string `yaml:"ignored_dirs"`
+	Mode         string   `yaml:"mode"`
+	Allowed      []string `yaml:"allowed_dirs,omitempty"`
+	Ignored      []string `yaml:"ignored_dirs"`
+	StandardDirs []string `yaml:"standard_dirs"`
 }
 
 func DefaultWikiDirs() WikiDirs {
 	return WikiDirs{
-		Mode:    LLMWikiDefaults.Mode,
-		Ignored: append([]string(nil), LLMWikiDefaults.Ignored...),
+		Mode:         LLMWikiDefaults.Mode,
+		Ignored:      append([]string(nil), LLMWikiDefaults.Ignored...),
+		StandardDirs: append([]string(nil), LLMWikiStandardDirs...),
 	}
 }
 
@@ -202,9 +204,9 @@ func dirMatches(rel, pattern string) bool {
 }
 
 // MissingStandardDirs returns LLM Wiki folders absent under wikiPath (for init hints).
-func MissingStandardDirs(wikiPath string) []string {
+func MissingStandardDirs(wikiPath string, standardDirs []string) []string {
 	var missing []string
-	for _, d := range LLMWikiStandardDirs {
+	for _, d := range standardDirs {
 		p := filepath.Join(wikiPath, d)
 		st, err := os.Stat(p)
 		if err != nil || !st.IsDir() {

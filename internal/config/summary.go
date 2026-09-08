@@ -32,8 +32,12 @@ func FormatWikiDirsSummary(w WikiDirs) string {
 		}
 	}
 	b.WriteString("\nRoot-level *.md files are always included.\n")
-	b.WriteString("raw/ is never synced (compiled wiki/ only).\n")
-	b.WriteString("Standard LLM Wiki folders: sources, entities, concepts, analyses\n")
+	b.WriteString("Vault paths excluded from asset lookup: see sync.exclude_vault_paths in config.\n")
+	if len(w.StandardDirs) > 0 {
+		b.WriteString("Standard LLM Wiki folders: ")
+		b.WriteString(strings.Join(w.StandardDirs, ", "))
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 

@@ -36,12 +36,15 @@ type Transport struct {
 	HTTPClient *http.Client
 }
 
-func NewTransport(baseURL string) *Transport {
+func NewTransport(baseURL string, timeout time.Duration) *Transport {
 	baseURL = strings.TrimRight(baseURL, "/")
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
 	return &Transport{
 		BaseURL: baseURL,
 		HTTPClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: timeout,
 		},
 	}
 }

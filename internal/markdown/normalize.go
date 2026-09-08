@@ -37,12 +37,14 @@ type NormalizedNote struct {
 }
 
 type NormalizeOpts struct {
-	VaultRoot        string
-	SourceRoot       string
-	SourceRel        string
-	NoteIndex        map[string]string
-	AttachmentFolder string
-	AssetOutDir      string
+	VaultRoot           string
+	SourceRoot          string
+	SourceRel           string
+	AssetsRoot          string
+	NoteIndex           map[string]string
+	AttachmentFolder    string
+	IsExcludedVaultPath func(string) bool
+	AssetOutDir         string
 }
 
 func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, error) {
@@ -157,11 +159,23 @@ func resolveNote(target string, idx map[string]string) (string, bool) {
 
 func assetCandidates(target, noteDir string, opts NormalizeOpts) []string {
 	base := filepath.Base(target)
+	assetsRoot := opts.AssetsRoot
+	if assetsRoot == "" {
+		assetsRoot = "assets"
+	}
 	var c []string
 	add := func(p string) {
-		if p != "" {
-			c = append(c, p)
+		if p == "" {
+			return
 		}
+		if opts.IsExcludedVaultPath != nil {
+			if rel, err := filepath.Rel(opts.VaultRoot, p); err == nil {
+				if opts.IsExcludedVaultPath(filepath.ToSlash(rel)) {
+					return
+				}
+			}
+		}
+		c = append(c, p)
 	}
 	if noteDir != "." && noteDir != "" {
 		add(filepath.Join(opts.SourceRoot, noteDir, target))
@@ -174,7 +188,7 @@ func assetCandidates(target, noteDir string, opts NormalizeOpts) []string {
 	}
 	add(filepath.Join(opts.VaultRoot, "Attachments", base))
 	add(filepath.Join(opts.VaultRoot, "assets", base))
-	add(filepath.Join(opts.SourceRoot, "assets", base))
+	add(filepath.Join(opts.SourceRoot, assetsRoot, base))
 	return c
 }
 
@@ -198,7 +212,11 @@ func resolveAsset(target, noteDir string, opts NormalizeOpts) (*AssetRef, error)
 	sum := sha256.Sum256(data)
 	prefix := hex.EncodeToString(sum[:])[:4]
 	name := sanitizeName(filepath.Base(found))
-	deviceRel := filepath.ToSlash(filepath.Join("assets", prefix, name))
+	assetsRoot := opts.AssetsRoot
+	if assetsRoot == "" {
+		assetsRoot = "assets"
+	}
+	deviceRel := filepath.ToSlash(filepath.Join(assetsRoot, prefix, name))
 
 	if opts.AssetOutDir != "" {
 		dest := filepath.Join(opts.AssetOutDir, prefix, name)
@@ -218,10 +236,15 @@ func resolveAsset(target, noteDir string, opts NormalizeOpts) (*AssetRef, error)
 }
 
 func relPathFromNote(noteDir, target, sourceRel string) string {
+	if sourceRel == "" {
+		sourceRel = "wiki"
+	}
 	from := filepath.Join(sourceRel, noteDir)
-	to := target
-	if !strings.HasPrefix(target, "assets/") {
-		to = filepath.Join(sourceRel, target)
+	to := filepath.ToSlash(target)
+	srcPrefix := sourceRel + "/"
+	// Note paths from the index are relative to source_root (e.g. entities/foo.md).
+	if !strings.HasPrefix(to, srcPrefix) && strings.HasSuffix(to, ".md") {
+		to = filepath.ToSlash(filepath.Join(sourceRel, target))
 	}
 	rel, err := filepath.Rel(from, to)
 	if err != nil {

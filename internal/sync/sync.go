@@ -46,26 +46,19 @@ type SyncResult struct {
 	Errors   []string
 }
 
-func DeviceInit(t *Transport, root string) error {
+func DeviceInit(t *Transport, root, tool string) error {
 	root = path.Clean(root)
-	if root != "/x3vault" {
-		return fmt.Errorf("v0 only supports root /x3vault (got %q)", root)
+	if root == "" || root == "/" {
+		return fmt.Errorf("device root must be an absolute path (e.g. /x3vault)")
 	}
-	entries, err := t.List("/")
-	if err != nil {
-		return fmt.Errorf("list root: %w", err)
+	if !strings.HasPrefix(root, "/") {
+		return fmt.Errorf("device root must start with / (got %q)", root)
 	}
-	hasRoot := false
-	for _, e := range entries {
-		if e.Name == "x3vault" && e.IsDirectory {
-			hasRoot = true
-			break
-		}
+	if err := ensureDeviceRoot(t, root); err != nil {
+		return fmt.Errorf("ensure device root: %w", err)
 	}
-	if !hasRoot {
-		if err := t.Mkdir("/", "x3vault"); err != nil {
-			return fmt.Errorf("create /x3vault: %w", err)
-		}
+	if tool == "" {
+		tool = "x3vault"
 	}
 	metaEntries, err := t.List(root + "/_meta")
 	owned := false
@@ -91,7 +84,7 @@ func DeviceInit(t *Transport, root string) error {
 		}
 		own := Ownership{
 			Schema:    OwnershipSchema,
-			Tool:      "x3vault",
+			Tool:      tool,
 			CreatedAt: time.Now().UTC().Format(time.RFC3339),
 			Root:      root,
 		}
@@ -99,6 +92,34 @@ func DeviceInit(t *Transport, root string) error {
 		if err := t.Upload(root+"/_meta", "ownership.json", data); err != nil {
 			return fmt.Errorf("write ownership marker: %w", err)
 		}
+	}
+	return nil
+}
+
+func ensureDeviceRoot(t *Transport, root string) error {
+	parts := strings.Split(strings.Trim(root, "/"), "/")
+	cur := "/"
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		entries, err := t.List(cur)
+		if err != nil {
+			return err
+		}
+		exists := false
+		for _, e := range entries {
+			if e.Name == part && e.IsDirectory {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			if err := t.Mkdir(cur, part); err != nil {
+				return err
+			}
+		}
+		cur = path.Join(cur, part)
 	}
 	return nil
 }
@@ -116,7 +137,7 @@ func HasOwnership(t *Transport, root string) (bool, error) {
 	return false, nil
 }
 
-func BuildPlan(t *Transport, root, localCurrent string) (*Plan, error) {
+func BuildPlan(t *Transport, root, localCurrent string, opts Options) (*Plan, error) {
 	root = path.Clean(root)
 	owned, err := HasOwnership(t, root)
 	if err != nil {
@@ -168,7 +189,7 @@ func BuildPlan(t *Transport, root, localCurrent string) (*Plan, error) {
 	}
 	var uploadRels []string
 	for rel, localHash := range localHashes {
-		if needsUpload(t, root, rel, localHash, localCurrent, remoteFiles, remoteManifest) {
+		if needsUpload(t, root, rel, localHash, localCurrent, remoteFiles, remoteManifest, opts) {
 			uploadRels = append(uploadRels, rel)
 		}
 	}
@@ -205,7 +226,9 @@ func BuildPlan(t *Transport, root, localCurrent string) (*Plan, error) {
 			Type: "file",
 		})
 	}
-	appendEmptyDirDeletes(plan, localHashes, remoteFiles, deleteRels, remoteDirs, root)
+	if opts.CleanEmptyDirs {
+		appendEmptyDirDeletes(plan, localHashes, remoteFiles, deleteRels, remoteDirs, root)
+	}
 	return plan, nil
 }
 
@@ -285,9 +308,11 @@ func hasUndeletedSubdir(dir string, dirs, deleting map[string]bool) bool {
 	return false
 }
 
-func needsUpload(t *Transport, root, rel, localHash, localCurrent string, remoteFiles map[string]int64, remoteManifest *HashManifest) bool {
-	if remoteHash, ok := remoteManifest.Files[rel]; ok && remoteHash == localHash {
-		return false
+func needsUpload(t *Transport, root, rel, localHash, localCurrent string, remoteFiles map[string]int64, remoteManifest *HashManifest, opts Options) bool {
+	if opts.HashManifest {
+		if remoteHash, ok := remoteManifest.Files[rel]; ok && remoteHash == localHash {
+			return false
+		}
 	}
 	rsize, exists := remoteFiles[rel]
 	if !exists {
@@ -306,9 +331,9 @@ func needsUpload(t *Transport, root, rel, localHash, localCurrent string, remote
 	return hex.EncodeToString(sum[:]) != localHash
 }
 
-func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool) *SyncResult {
+func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool, opts Options) *SyncResult {
 	res := &SyncResult{}
-	root := "/x3vault"
+	root := path.Clean(opts.DeviceRoot)
 	seenDir := map[string]bool{}
 	var dirs []string
 	for _, op := range plan.Mkdirs {
@@ -331,11 +356,18 @@ func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool) *Sync
 			parent = "/"
 		}
 		if err := t.Mkdir(parent, name); err != nil {
-			return res.fail(fmt.Sprintf("mkdir %s: %v", d, err))
+			if res.onError(opts, fmt.Sprintf("mkdir %s: %v", d, err)) {
+				return res
+			}
+			continue
 		}
 	}
 	for _, op := range plan.Uploads {
 		rel := strings.TrimPrefix(op.Path, root+"/")
+		if rel == op.Path {
+			rel = strings.TrimPrefix(op.Path, root)
+			rel = strings.TrimPrefix(rel, "/")
+		}
 		localPath := filepath.Join(localCurrent, filepath.FromSlash(rel))
 		if dryRun {
 			fmt.Fprintf(os.Stderr, "  upload %s (%d bytes)\n", op.Path, op.Size)
@@ -344,12 +376,18 @@ func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool) *Sync
 		}
 		data, err := os.ReadFile(localPath)
 		if err != nil {
-			return res.fail(fmt.Sprintf("read %s: %v", localPath, err))
+			if res.onError(opts, fmt.Sprintf("read %s: %v", localPath, err)) {
+				return res
+			}
+			continue
 		}
 		dir := path.Dir(op.Path)
 		name := path.Base(op.Path)
 		if err := t.Upload(dir, name, data); err != nil {
-			return res.fail(fmt.Sprintf("upload %s: %v", op.Path, err))
+			if res.onError(opts, fmt.Sprintf("upload %s: %v", op.Path, err)) {
+				return res
+			}
+			continue
 		}
 		res.Uploaded++
 		fmt.Fprintf(os.Stderr, "  uploaded %s\n", op.Path)
@@ -369,7 +407,10 @@ func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool) *Sync
 			continue
 		}
 		if err := t.Delete(op.Path, op.Type); err != nil {
-			return res.fail(fmt.Sprintf("delete %s: %v", op.Path, err))
+			if res.onError(opts, fmt.Sprintf("delete %s: %v", op.Path, err)) {
+				return res
+			}
+			continue
 		}
 		res.Deleted++
 		fmt.Fprintf(os.Stderr, "  deleted %s\n", op.Path)
@@ -384,22 +425,27 @@ func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool) *Sync
 			continue
 		}
 		if err := t.Delete(op.Path, op.Type); err != nil {
-			return res.fail(fmt.Sprintf("rmdir %s: %v", op.Path, err))
+			if res.onError(opts, fmt.Sprintf("rmdir %s: %v", op.Path, err)) {
+				return res
+			}
+			continue
 		}
 		res.Deleted++
 		fmt.Fprintf(os.Stderr, "  rmdir %s\n", op.Path)
 	}
-	if !dryRun && len(res.Errors) == 0 {
+	if !dryRun && len(res.Errors) == 0 && opts.HashManifest {
 		if err := writeHashManifest(t, root, localCurrent); err != nil {
-			return res.fail(fmt.Sprintf("update hash manifest: %v", err))
+			if res.onError(opts, fmt.Sprintf("update hash manifest: %v", err)) {
+				return res
+			}
 		}
 	}
 	return res
 }
 
-func (res *SyncResult) fail(msg string) *SyncResult {
+func (res *SyncResult) onError(opts Options, msg string) bool {
 	res.Errors = append(res.Errors, msg)
-	return res
+	return opts.FailFast
 }
 
 func writeHashManifest(t *Transport, root, localCurrent string) error {
