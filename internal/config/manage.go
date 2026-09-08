@@ -1,9 +1,9 @@
 package config
 
-// UpdateConfig loads config, applies fn, validates, and saves.
-// vault_root from the loaded config is preserved after fn runs.
+// UpdateConfig edits serialized values, preserving vault_root and leaving
+// relative paths relative. Resolve validates a copy before the atomic save.
 func UpdateConfig(configPath string, fn func(*Config) error) (*Config, error) {
-	cfg, err := LoadFromPath(configPath)
+	cfg, err := Load(configPath)
 	if err != nil {
 		return nil, err
 	}
@@ -18,17 +18,8 @@ func UpdateConfig(configPath string, fn func(*Config) error) (*Config, error) {
 	return cfg, nil
 }
 
-// UpdateWikiDirs loads config, applies fn, validates, and saves.
+// UpdateWikiDirs shares the config update path so validation and persistence
+// have the same behavior for both commands.
 func UpdateWikiDirs(configPath string, fn func(*WikiDirs) error) (*Config, error) {
-	cfg, err := LoadFromPath(configPath)
-	if err != nil {
-		return nil, err
-	}
-	if err := fn(&cfg.Wiki); err != nil {
-		return nil, err
-	}
-	if err := Save(configPath, cfg); err != nil {
-		return nil, err
-	}
-	return cfg, nil
+	return UpdateConfig(configPath, func(cfg *Config) error { return fn(&cfg.Wiki) })
 }

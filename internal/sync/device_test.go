@@ -1,12 +1,15 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -43,7 +46,11 @@ func (m *mockDevice) handler(w http.ResponseWriter, r *http.Request) {
 		if path == "" {
 			path = "/"
 		}
-		var entries []FileEntry
+		if !m.dirs[path] {
+			http.NotFound(w, r)
+			return
+		}
+		entries := []FileEntry{}
 		prefix := strings.TrimSuffix(path, "/") + "/"
 		seen := map[string]bool{}
 		for p, data := range m.files {
@@ -89,7 +96,16 @@ func (m *mockDevice) handler(w http.ResponseWriter, r *http.Request) {
 		if parent == "" {
 			parent = "/"
 		}
-		m.dirs[strings.TrimSuffix(filepath.Join(parent, name), "/")] = true
+		p := path.Join(parent, name)
+		if !m.dirs[parent] {
+			http.Error(w, "missing parent", http.StatusNotFound)
+			return
+		}
+		if _, exists := m.files[p]; exists || m.dirs[p] {
+			http.Error(w, "already exists", http.StatusConflict)
+			return
+		}
+		m.dirs[p] = true
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodPost && r.URL.Path == "/upload":
 		dir := r.URL.Query().Get("path")
@@ -100,7 +116,11 @@ func (m *mockDevice) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		data, _ := io.ReadAll(file)
 		_ = file.Close()
-		p := filepath.Join(dir, header.Filename)
+		p := path.Join(dir, header.Filename)
+		if !m.dirs[dir] || m.dirs[p] {
+			http.Error(w, "missing parent or conflicting directory", http.StatusConflict)
+			return
+		}
 		m.files[p] = data
 		m.uploads = append(m.uploads, p)
 		w.WriteHeader(http.StatusOK)
@@ -108,6 +128,18 @@ func (m *mockDevice) handler(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		p := r.Form.Get("path")
 		if r.Form.Get("type") == "directory" {
+			for child := range m.dirs {
+				if strings.HasPrefix(child, p+"/") {
+					http.Error(w, "directory not empty", http.StatusConflict)
+					return
+				}
+			}
+			for child := range m.files {
+				if strings.HasPrefix(child, p+"/") {
+					http.Error(w, "directory not empty", http.StatusConflict)
+					return
+				}
+			}
 			delete(m.dirs, p)
 		} else {
 			delete(m.files, p)
@@ -184,7 +216,7 @@ func TestDeviceInitAndSyncPlan(t *testing.T) {
 	}
 }
 
-func TestHasOwnershipReturnsListError(t *testing.T) {
+func TestHasOwnershipReturnsReadError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "fail", http.StatusInternalServerError)
 	}))
@@ -192,6 +224,65 @@ func TestHasOwnershipReturnsListError(t *testing.T) {
 	tr := NewTransport(srv.URL, time.Second)
 	_, err := HasOwnership(context.Background(), tr, "/ereader")
 	if err == nil {
-		t.Fatal("expected error when list fails")
+		t.Fatal("expected error when marker read fails")
+	}
+}
+
+func TestHTTPDeviceSyncFinalStateAndIdempotence(t *testing.T) {
+	dev := newMockDevice()
+	srv := httptest.NewServer(http.HandlerFunc(dev.handler))
+	defer srv.Close()
+	ctx := context.Background()
+	transport := NewTransport(srv.URL, time.Second)
+	opts := syncTestOptions()
+	if err := DeviceInit(ctx, transport, opts.DeviceRoot, opts.OwnershipTool); err != nil {
+		t.Fatal(err)
+	}
+	dev.mu.Lock()
+	dev.dirs["/ereader/old"] = true
+	dev.dirs["/ereader/_metadata"] = true
+	dev.files["/ereader/old/obsolete.md"] = []byte("obsolete")
+	dev.files["/ereader/_meta/keep.json"] = []byte("preserve")
+	dev.mu.Unlock()
+	contents := bytes.Repeat([]byte("markdown bytes\n"), 7000)
+	local := localBuildFile(t, "wiki/deep/note # ? &.md", contents)
+	plan, err := BuildPlan(ctx, transport, opts.DeviceRoot, local, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := ApplyPlan(ctx, transport, plan, local, false, opts); len(result.Errors) > 0 {
+		t.Fatal(result.Errors)
+	}
+	data, err := transport.ReadFile(ctx, "/ereader/wiki/deep/note # ? &.md")
+	if err != nil || !bytes.Equal(data, contents) {
+		t.Fatalf("uploaded bytes do not match: len=%d err=%v", len(data), err)
+	}
+	dev.mu.Lock()
+	oldDir, oldFile, metaDir := dev.dirs["/ereader/old"], dev.files["/ereader/old/obsolete.md"], dev.dirs["/ereader/_metadata"]
+	preserved := string(dev.files["/ereader/_meta/keep.json"])
+	dev.mu.Unlock()
+	if oldDir || oldFile != nil || metaDir || preserved != "preserve" {
+		t.Fatal("sync final state did not preserve metadata and remove obsolete content")
+	}
+	plan, err = BuildPlan(ctx, transport, opts.DeviceRoot, local, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Uploads)+len(plan.Mkdirs)+len(plan.Deletes) != 0 {
+		t.Fatalf("unchanged second plan performs content operations: %+v", plan)
+	}
+	if result := ApplyPlan(ctx, transport, plan, local, false, opts); len(result.Errors) > 0 {
+		t.Fatal(result.Errors)
+	}
+	manifest, err := LoadRemoteHashManifest(ctx, transport, opts.DeviceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashes, err := HashLocalTree(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(manifest.Files, hashes) {
+		t.Fatal("receipt does not match final content")
 	}
 }

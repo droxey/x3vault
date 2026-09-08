@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/droxey/x3vault/internal/pathutil"
 )
 
 const (
@@ -32,7 +34,7 @@ var LLMWikiDefaults = WikiDirs{
 
 // WikiDirs controls which subdirectories under source_root (wiki/) are synced.
 // Default mode syncs all subdirectories except ignored_dirs. Root-level *.md is always included.
-// raw/ is never synced (outside source_root).
+// Vault-relative exclusions are applied separately during discovery.
 type WikiDirs struct {
 	Mode         string   `yaml:"mode"`
 	Allowed      []string `yaml:"allowed_dirs,omitempty"`
@@ -77,6 +79,11 @@ func (w *WikiDirs) Validate() error {
 			return err
 		}
 	}
+	for _, d := range w.StandardDirs {
+		if err := validateDirEntry(d, "standard_dirs"); err != nil {
+			return err
+		}
+	}
 	if w.Mode == WikiModeWhitelist && len(w.Allowed) == 0 {
 		return fmt.Errorf("wiki.mode %q requires at least one allowed_dirs entry", WikiModeWhitelist)
 	}
@@ -91,12 +98,8 @@ func (w *WikiDirs) Validate() error {
 }
 
 func validateDirEntry(dir, field string) error {
-	dir = cleanDirEntry(dir)
-	if dir == "" || dir == "." {
-		return fmt.Errorf("%s entry must be a non-empty relative path", field)
-	}
-	if filepath.IsAbs(dir) {
-		return fmt.Errorf("%s entry %q must be relative to source_root", field, dir)
+	if err := pathutil.ValidateRelative(dir); err != nil {
+		return fmt.Errorf("%s entry %q: %w", field, dir, err)
 	}
 	if strings.HasPrefix(dir, ".") {
 		return fmt.Errorf("%s entry %q must not start with '.'", field, dir)
@@ -112,7 +115,7 @@ func normalizeDirList(in []string) []string {
 	var out []string
 	for _, item := range in {
 		item = cleanDirEntry(item)
-		if item == "" || seen[item] {
+		if seen[item] {
 			continue
 		}
 		seen[item] = true
@@ -122,10 +125,7 @@ func normalizeDirList(in []string) []string {
 }
 
 func cleanDirEntry(dir string) string {
-	dir = strings.TrimSpace(dir)
-	dir = strings.Trim(dir, "/")
-	dir = filepath.ToSlash(dir)
-	return dir
+	return strings.TrimSpace(dir)
 }
 
 func (w *WikiDirs) ShouldIncludeRelPath(rel string) bool {
@@ -143,7 +143,7 @@ func (w *WikiDirs) ShouldIncludeRelPath(rel string) bool {
 }
 
 func (w *WikiDirs) ShouldWalkDir(relDir string) bool {
-	relDir = cleanDirEntry(relDir)
+	relDir = cleanDirEntry(filepath.ToSlash(relDir))
 	if relDir == "" || relDir == "." {
 		return true
 	}
@@ -185,10 +185,7 @@ func dirRelevant(relDir, allowed string) bool {
 	if allowed == "" {
 		return false
 	}
-	if dirMatches(relDir, allowed) || dirMatches(allowed, relDir) {
-		return true
-	}
-	return strings.HasPrefix(allowed, relDir+"/")
+	return dirMatches(relDir, allowed) || dirMatches(allowed, relDir)
 }
 
 func dirMatches(rel, pattern string) bool {

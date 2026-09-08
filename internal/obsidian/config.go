@@ -2,9 +2,12 @@ package obsidian
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/droxey/x3vault/internal/pathutil"
 )
 
 type appJSON struct {
@@ -12,10 +15,42 @@ type appJSON struct {
 }
 
 // AttachmentFolder returns Obsidian's configured attachment directory relative
-// to the vault root, or "" when attachments live beside each note.
+// to the vault root. A leading ./ denotes a directory relative to each note.
 func AttachmentFolder(vaultRoot string) string {
-	path := filepath.Join(vaultRoot, ".obsidian", "app.json")
-	data, err := os.ReadFile(path)
+	// A vault alias is supported, but metadata entries themselves must be real
+	// directories/files. Rooted reads also prevent an entry swap escaping the vault.
+	vault, err := os.OpenRoot(vaultRoot)
+	if err != nil {
+		return ""
+	}
+	defer vault.Close()
+	dirInfo, err := vault.Lstat(".obsidian")
+	if err != nil || !dirInfo.IsDir() {
+		return ""
+	}
+	metadata, err := vault.OpenRoot(".obsidian")
+	if err != nil {
+		return ""
+	}
+	defer metadata.Close()
+	openedDir, err := metadata.Stat(".")
+	if err != nil || !os.SameFile(dirInfo, openedDir) {
+		return ""
+	}
+	appInfo, err := metadata.Lstat("app.json")
+	if err != nil || !appInfo.Mode().IsRegular() {
+		return ""
+	}
+	file, err := metadata.Open("app.json")
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	openedFile, err := file.Stat()
+	if err != nil || !openedFile.Mode().IsRegular() || !os.SameFile(appInfo, openedFile) {
+		return ""
+	}
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return ""
 	}
@@ -24,22 +59,30 @@ func AttachmentFolder(vaultRoot string) string {
 		return ""
 	}
 	p := strings.TrimSpace(cfg.AttachmentFolderPath)
-	if p == "" || p == "." || p == "./" {
+	if p == "./" {
+		return "."
+	}
+	if p == "" || p == "." {
+		return p
+	}
+	check := strings.TrimPrefix(p, "./")
+	if err := pathutil.ValidateRelative(check); err != nil {
 		return ""
 	}
-	p = filepath.ToSlash(p)
-	p = strings.Trim(p, "/")
 	return p
 }
 
-// ResolveAttachmentPath maps an Obsidian attachmentFolderPath value to an
-// absolute directory under vaultRoot.
-func ResolveAttachmentPath(vaultRoot, attachmentRel string) string {
+// ResolveAttachmentPath maps a validated relative folder to its base directory.
+// Callers must select the vault or note directory and enforce read containment.
+func ResolveAttachmentPath(base, attachmentRel string) string {
 	if attachmentRel == "" {
 		return ""
 	}
-	if filepath.IsAbs(attachmentRel) {
-		return attachmentRel
+	if attachmentRel == "." {
+		return base
 	}
-	return filepath.Join(vaultRoot, filepath.FromSlash(attachmentRel))
+	if err := pathutil.ValidateRelative(attachmentRel); err != nil {
+		return ""
+	}
+	return filepath.Join(base, filepath.FromSlash(attachmentRel))
 }

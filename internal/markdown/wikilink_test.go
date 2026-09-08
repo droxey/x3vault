@@ -1,6 +1,7 @@
 package markdown
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -8,7 +9,7 @@ import (
 
 func TestParseWikilink(t *testing.T) {
 	cases := []struct {
-		in             string
+		in                     string
 		target, heading, label string
 	}{
 		{"Page", "Page", "", ""},
@@ -45,12 +46,12 @@ func TestNormalizeWikilinkHeadingAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	idx := BuildNoteIndex([]NoteRef{
+	idx := BuildNoteIndex(context.Background(), []NoteRef{
 		{RelPath: "entities/page.md", AbsPath: notePath},
 		{RelPath: "concepts/target.md", AbsPath: targetPath},
-	})
+	}, fixtureNoteReader(t, wiki))
 	norm, err := Normalize(notePath, "entities/page.md", NormalizeOpts{
-		VaultRoot: dir,
+		VaultRoot:  dir,
 		SourceRoot: wiki,
 		SourceRel:  "wiki",
 		NoteIndex:  idx.Index,

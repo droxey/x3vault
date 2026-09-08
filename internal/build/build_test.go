@@ -1,8 +1,12 @@
 package build
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/droxey/x3vault/internal/config"
@@ -165,4 +169,401 @@ func TestRestoreBackupBuild(t *testing.T) {
 	if _, err := os.Stat(backup); !os.IsNotExist(err) {
 		t.Fatalf("backup should be gone after restore, err=%v", err)
 	}
+}
+
+func buildFixture(t *testing.T) (*config.Config, *vault.Discovery) {
+	t.Helper()
+	base := t.TempDir()
+	cfg := config.Default()
+	cfg.VaultRoot = filepath.Join(base, "vault")
+	cfg.BuildRoot = filepath.Join(base, "build")
+	writeBuildFixture(t, filepath.Join(cfg.VaultRoot, "wiki", "index.md"), "# Index\n")
+	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot, cfg.Wiki)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg, disc
+}
+
+func writeBuildFixture(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func requireBuildFile(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != want {
+		t.Fatalf("read %s = %q, %v; want %q", path, got, err, want)
+	}
+}
+
+type buildProgressFunc func([]byte) (int, error)
+
+func (f buildProgressFunc) Write(p []byte) (int, error) { return f(p) }
+
+func TestRunKeepsCurrentAndBackupWhenNormalizationFails(t *testing.T) {
+	cfg, disc := buildFixture(t)
+	current := filepath.Join(cfg.BuildRoot, "current", "build.manifest")
+	backup := filepath.Join(cfg.BuildRoot, "backup", "build.manifest")
+	writeBuildFixture(t, current, "current")
+	writeBuildFixture(t, backup, "backup")
+	if err := os.Remove(disc.Notes[0].AbsPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(cfg, disc, RunOptions{}); err == nil {
+		t.Fatal("missing source note should fail the build")
+	}
+	requireBuildFile(t, current, "current")
+	requireBuildFile(t, backup, "backup")
+	if _, err := os.Stat(filepath.Join(cfg.BuildRoot, "staging")); !os.IsNotExist(err) {
+		t.Fatalf("failed staging remains: %v", err)
+	}
+}
+
+func TestRunRejectsInvalidPathsBeforeMutation(t *testing.T) {
+	for _, mode := range []string{"ignored traversal", "vault build root", "symlink build root", "symlink staging", "source escape"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg, disc := buildFixture(t)
+			current := filepath.Join(cfg.BuildRoot, "current", "sentinel")
+			writeBuildFixture(t, current, "current")
+			sentinel := filepath.Join(cfg.VaultRoot, "sentinel")
+			writeBuildFixture(t, sentinel, "vault")
+			switch mode {
+			case "ignored traversal":
+				cfg.Wiki.Ignored = []string{"safe/../../../../victim"}
+			case "vault build root":
+				cfg.BuildRoot = cfg.VaultRoot
+			case "symlink build root":
+				cfg.BuildRoot = filepath.Join(filepath.Dir(cfg.VaultRoot), "alias")
+				if err := os.Symlink(cfg.VaultRoot, cfg.BuildRoot); err != nil {
+					t.Skip(err)
+				}
+			case "symlink staging":
+				if err := os.Symlink(cfg.VaultRoot, filepath.Join(cfg.BuildRoot, "staging")); err != nil {
+					t.Skip(err)
+				}
+			case "source escape":
+				cfg.SourceRoot = "../victim"
+			}
+			if _, err := Run(cfg, disc, RunOptions{}); err == nil {
+				t.Fatal("unsafe config should fail before writing")
+			}
+			requireBuildFile(t, sentinel, "vault")
+			requireBuildFile(t, current, "current")
+			if _, err := os.Stat(filepath.Join(cfg.VaultRoot, "current")); !os.IsNotExist(err) {
+				t.Fatalf("build wrote into vault: %v", err)
+			}
+		})
+	}
+}
+
+func TestComputeGenerationUsesRelativePathsAndAllContent(t *testing.T) {
+	first, second := t.TempDir(), t.TempDir()
+	for _, root := range []string{first, second} {
+		writeBuildFixture(t, filepath.Join(root, "wiki", "Note.MD"), "upper")
+		writeBuildFixture(t, filepath.Join(root, "wiki", "other.md"), "lower")
+		writeBuildFixture(t, filepath.Join(root, "assets", "image.png"), "asset")
+	}
+	generation := func(root string) string {
+		t.Helper()
+		gen, err := computeGeneration(context.Background(), root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return gen
+	}
+	before := generation(first)
+	if got := generation(second); got != before {
+		t.Errorf("same content at different locations: %s != %s", got, before)
+	}
+	writeBuildFixture(t, filepath.Join(first, "wiki", "Note.MD"), "changed upper")
+	afterNote := generation(first)
+	if afterNote == before {
+		t.Error("uppercase Markdown changes must affect generation")
+	}
+	writeBuildFixture(t, filepath.Join(first, "assets", "image.png"), "changed asset")
+	if got := generation(first); got == afterNote {
+		t.Error("asset changes must affect generation")
+	}
+}
+
+func TestComputeGenerationSeparatesPathsFromContent(t *testing.T) {
+	root := t.TempDir()
+	writeBuildFixture(t, filepath.Join(root, "a.md"), "bc.mdcontent")
+	first, err := computeGeneration(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "a.md")); err != nil {
+		t.Fatal(err)
+	}
+	writeBuildFixture(t, filepath.Join(root, "a.mdbc.md"), "content")
+	second, err := computeGeneration(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("different path/content boundaries must not share a generation")
+	}
+}
+
+func TestRunHonorsBuildLock(t *testing.T) {
+	cfg, disc := buildFixture(t)
+	current := filepath.Join(cfg.BuildRoot, "current", "sentinel")
+	writeBuildFixture(t, current, "current")
+	if err := os.Mkdir(filepath.Join(cfg.BuildRoot, ".build.lock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(cfg, disc, RunOptions{}); err == nil {
+		t.Fatal("a build with an existing lock must fail")
+	}
+	requireBuildFile(t, current, "current")
+}
+
+func TestRunCancellationPreservesCurrentAndCleansStaging(t *testing.T) {
+	for _, beforeRun := range []bool{true, false} {
+		t.Run(fmt.Sprint(beforeRun), func(t *testing.T) {
+			cfg, disc := buildFixture(t)
+			current := filepath.Join(cfg.BuildRoot, "current", "sentinel")
+			writeBuildFixture(t, current, "current")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if beforeRun {
+				cancel()
+			}
+			_, err := Run(cfg, disc, RunOptions{Context: ctx, Progress: buildProgressFunc(func(p []byte) (int, error) {
+				requireBuildFile(t, current, "current")
+				cancel()
+				return len(p), nil
+			})})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run error = %v, want context.Canceled", err)
+			}
+			requireBuildFile(t, current, "current")
+			for _, name := range []string{"staging", ".build.lock"} {
+				if _, err := os.Stat(filepath.Join(cfg.BuildRoot, name)); !os.IsNotExist(err) {
+					t.Fatalf("%s remains: %v", name, err)
+				}
+			}
+		})
+	}
+}
+
+func TestRunSerializesWhileKeepingCurrentAvailable(t *testing.T) {
+	cfg, disc := buildFixture(t)
+	current := filepath.Join(cfg.BuildRoot, "current", "sentinel")
+	writeBuildFixture(t, current, "current")
+	_, err := Run(cfg, disc, RunOptions{Progress: buildProgressFunc(func(p []byte) (int, error) {
+		requireBuildFile(t, current, "current")
+		if _, err := Run(cfg, disc, RunOptions{}); err == nil {
+			t.Error("competing build acquired the lock")
+		}
+		return len(p), nil
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.BuildRoot, ".build.lock")); !os.IsNotExist(err) {
+		t.Fatalf("lock remains: %v", err)
+	}
+}
+
+func TestGenerationIgnoresBuildManifest(t *testing.T) {
+	root := t.TempDir()
+	writeBuildFixture(t, filepath.Join(root, "wiki", "note.md"), "note")
+	first, err := computeGeneration(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeBuildFixture(t, filepath.Join(root, "build.manifest"), "built: timestamp\n")
+	second, err := computeGeneration(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("manifest changed generation: %s != %s", first, second)
+	}
+}
+
+func TestRunWriteFailuresKeepPreviousBuild(t *testing.T) {
+	for _, failAt := range []string{"note", "attachment", "manifest"} {
+		t.Run(failAt, func(t *testing.T) {
+			cfg, disc := buildFixture(t)
+			current := filepath.Join(cfg.BuildRoot, "current", "sentinel")
+			writeBuildFixture(t, current, "current")
+			if failAt == "attachment" {
+				writeBuildFixture(t, disc.Notes[0].AbsPath, "![[image.png]]\n")
+				writeBuildFixture(t, filepath.Join(disc.SourceRoot, "image.png"), "image")
+			}
+			_, err := Run(cfg, disc, RunOptions{Progress: buildProgressFunc(func(p []byte) (int, error) {
+				staging := filepath.Join(cfg.BuildRoot, "staging")
+				switch failAt {
+				case "note":
+					if err := os.Mkdir(filepath.Join(staging, cfg.SourceRoot, "index.md"), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				case "attachment":
+					assets := filepath.Join(staging, cfg.Build.AssetsRoot)
+					if err := os.Remove(assets); err != nil {
+						t.Fatal(err)
+					}
+					writeBuildFixture(t, assets, "blocks asset output")
+				case "manifest":
+					if err := os.Mkdir(filepath.Join(staging, "build.manifest"), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return len(p), nil
+			})})
+			if err == nil {
+				t.Fatal("output failure should fail the build")
+			}
+			requireBuildFile(t, current, "current")
+			if _, err := os.Stat(filepath.Join(cfg.BuildRoot, "staging")); !os.IsNotExist(err) {
+				t.Fatalf("failed staging remains: %v", err)
+			}
+		})
+	}
+}
+
+func TestPromotionFailureRestoresCurrent(t *testing.T) {
+	root := t.TempDir()
+	current := filepath.Join(root, "current", "sentinel")
+	writeBuildFixture(t, current, "current")
+	// An absent staging directory forces the promotion rename itself to fail,
+	// after the previous current has been moved to backup.
+	if err := promoteBuild(context.Background(), root); err == nil {
+		t.Fatal("missing staging should fail promotion")
+	}
+	requireBuildFile(t, current, "current")
+}
+
+func TestRunReportsCleanupFailureWithoutFollowingSymlink(t *testing.T) {
+	cfg, disc := buildFixture(t)
+	sentinel := filepath.Join(cfg.VaultRoot, "sentinel")
+	writeBuildFixture(t, sentinel, "vault")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := Run(cfg, disc, RunOptions{Context: ctx, Progress: buildProgressFunc(func(p []byte) (int, error) {
+		staging := filepath.Join(cfg.BuildRoot, "staging")
+		if err := os.RemoveAll(staging); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(cfg.VaultRoot, staging); err != nil {
+			t.Skip(err)
+		}
+		cancel()
+		return len(p), nil
+	})})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "clean failed staging") {
+		t.Fatalf("cleanup and cancellation errors must both be reported: %v", err)
+	}
+	requireBuildFile(t, sentinel, "vault")
+}
+
+func TestRestoreBackupBuildReportsConflictingCurrent(t *testing.T) {
+	root := t.TempDir()
+	current := filepath.Join(root, "current", "sentinel")
+	backup := filepath.Join(root, "backup", "sentinel")
+	writeBuildFixture(t, current, "unexpected current")
+	writeBuildFixture(t, backup, "previous current")
+	if err := restoreBackupBuild(root); err == nil {
+		t.Fatal("restoring over an unexpected current must report a conflict")
+	}
+	requireBuildFile(t, current, "unexpected current")
+	requireBuildFile(t, backup, "previous current")
+}
+
+func TestRestoreBackupBuildReportsMissingBackup(t *testing.T) {
+	if err := restoreBackupBuild(t.TempDir()); err == nil {
+		t.Fatal("missing backup must be reported as failed restoration")
+	}
+}
+
+func TestRunRejectsNoteReplacedWithOutsideSymlink(t *testing.T) {
+	cfg, disc := buildFixture(t)
+	current := filepath.Join(cfg.BuildRoot, "current", "sentinel")
+	writeBuildFixture(t, current, "previous build")
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	writeBuildFixture(t, outside, "SYNTHETIC OUTSIDE NOTE\n")
+	changed := false
+	_, err := Run(cfg, disc, RunOptions{Progress: buildProgressFunc(func(p []byte) (int, error) {
+		if !changed {
+			changed = true
+			if err := os.Remove(disc.Notes[0].AbsPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, disc.Notes[0].AbsPath); err != nil {
+				t.Skip(err)
+			}
+		}
+		return len(p), nil
+	})})
+	if err == nil {
+		t.Fatal("a note replaced with an outside symlink must fail the build")
+	}
+	requireBuildFile(t, current, "previous build")
+	for _, name := range []string{"staging", ".build.lock"} {
+		if _, err := os.Lstat(filepath.Join(cfg.BuildRoot, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s remains after failure: %v", name, err)
+		}
+	}
+}
+
+func TestRunReadsOriginalSourceWhenRootIsReplaced(t *testing.T) {
+	cfg, disc := buildFixture(t)
+	writeBuildFixture(t, disc.Notes[0].AbsPath, "---\ntitle: Original title\n---\n# Original note\n[[Original title|Original title]]\n")
+	outside := t.TempDir()
+	writeBuildFixture(t, filepath.Join(outside, "index.md"), "---\ntitle: Outside title\n---\nSYNTHETIC OUTSIDE NOTE\n")
+	changed := false
+	res, err := Run(cfg, disc, RunOptions{Progress: buildProgressFunc(func(p []byte) (int, error) {
+		if !changed {
+			changed = true
+			if err := os.Rename(disc.SourceRoot, disc.SourceRoot+".original"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, disc.SourceRoot); err != nil {
+				t.Skip(err)
+			}
+		}
+		return len(p), nil
+	})})
+	if err != nil {
+		t.Fatalf("the anchored original source should remain readable: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(res.StagingDir, cfg.SourceRoot, "index.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "# Original note") || strings.Contains(string(body), "SYNTHETIC OUTSIDE NOTE") {
+		t.Fatalf("build did not retain the original source root: %s", body)
+	}
+	if !strings.Contains(string(body), "[Original title](index.md)") {
+		t.Fatalf("note index did not use the original source metadata: %s", body)
+	}
+}
+
+func TestRunReadsNotesThroughVaultAlias(t *testing.T) {
+	cfg, _ := buildFixture(t)
+	alias := filepath.Join(filepath.Dir(cfg.VaultRoot), "vault-alias")
+	if err := os.Symlink(cfg.VaultRoot, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	cfg.VaultRoot = alias
+	writeBuildFixture(t, filepath.Join(alias, cfg.SourceRoot, "index.md"), "---\ntitle: Vault alias title\n---\n[[Vault alias title|Alias link]]\n")
+	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot, cfg.Wiki)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(cfg, disc, RunOptions{})
+	if err != nil {
+		t.Fatalf("build through vault alias: %v; result: %+v", err, res)
+	}
+	requireBuildFile(t, filepath.Join(res.StagingDir, cfg.SourceRoot, "index.md"), "# Vault alias title\n\n[Alias link](index.md)\n")
 }

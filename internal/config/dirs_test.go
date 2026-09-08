@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 )
 
@@ -80,5 +81,21 @@ func TestShouldWalkDirAncestorWhitelist(t *testing.T) {
 	}
 	if d.ShouldWalkDir("concepts") {
 		t.Fatal("expected unrelated dir concepts to be skipped")
+	}
+}
+
+func TestShouldWalkDirNativeNestedPaths(t *testing.T) {
+	dirs := WikiDirs{Mode: WikiModeWhitelist, Allowed: []string{"domains/inbox/entities"}, Ignored: []string{"domains/inbox/entities/private"}}
+	for _, parts := range [][]string{{"domains"}, {"domains", "inbox"}, {"domains", "inbox", "entities"}, {"domains", "inbox", "entities", "public"}} {
+		native := filepath.Join(parts...)
+		if !dirs.ShouldWalkDir(native) {
+			t.Errorf("should walk native directory %q", native)
+		}
+	}
+	if dirs.ShouldWalkDir(filepath.Join("domains", "inbox", "entities", "private")) {
+		t.Fatal("walked ignored native directory")
+	}
+	if dirs.ShouldWalkDir(filepath.Join("domains", "other")) {
+		t.Fatal("walked unrelated native directory")
 	}
 }

@@ -90,3 +90,63 @@ func TestDiscoverWhitelistMode(t *testing.T) {
 		t.Fatalf("notes = %d, want 2 in whitelist mode", len(disc.Notes))
 	}
 }
+
+func TestDiscoverRejectsSymlinkNote(t *testing.T) {
+	vaultDir := t.TempDir()
+	wiki := filepath.Join(vaultDir, "wiki")
+	if err := os.Mkdir(wiki, 0755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "note.md")
+	if err := os.WriteFile(outside, []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(wiki, "link.md")); err != nil {
+		t.Skip(err)
+	}
+	if _, err := Discover(vaultDir, "wiki", config.DefaultWikiDirs()); err == nil {
+		t.Fatal("accepted symlinked note")
+	}
+}
+
+func TestDiscoverRejectsSymlinkSourceInsideVault(t *testing.T) {
+	vaultDir := t.TempDir()
+	source := filepath.Join(vaultDir, "actual")
+	if err := os.Mkdir(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(source, filepath.Join(vaultDir, "wiki")); err != nil {
+		t.Skip(err)
+	}
+	if _, err := Discover(vaultDir, "wiki", config.DefaultWikiDirs()); err == nil {
+		t.Fatal("accepted symlinked source")
+	}
+}
+
+func TestDiscoverEnforcesVaultExclusions(t *testing.T) {
+	vaultDir := t.TempDir()
+	for _, rel := range []string{"wiki/index.md", "wiki/private/secret.md", "wiki/private-notes/visible.MD"} {
+		p := filepath.Join(vaultDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("note"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := Discover(vaultDir, "wiki", config.DefaultWikiDirs(), []string{"wiki/private", "wiki/index.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Notes) != 1 || got.Notes[0].RelPath != "private-notes/visible.MD" {
+		t.Fatalf("notes: %+v", got.Notes)
+	}
+}
+
+func TestDiscoverRejectsUnsafeSourceSegments(t *testing.T) {
+	for _, source := range []string{"wiki/../wiki", "/wiki", `wiki\notes`, "."} {
+		if _, err := Discover(t.TempDir(), source, config.DefaultWikiDirs()); err == nil {
+			t.Errorf("accepted %q", source)
+		}
+	}
+}
