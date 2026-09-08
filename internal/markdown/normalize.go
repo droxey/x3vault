@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -82,21 +83,27 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 		}
 
 		ext := strings.ToLower(filepath.Ext(target))
-		if isImageExt(ext) {
+		if ext != "" && ext != ".md" {
 			asset, err := resolveAsset(target, noteDir, opts)
-			if err != nil {
-				out.Warnings = append(out.Warnings, fmt.Sprintf("missing asset %s: %v", target, err))
+			if err == nil {
+				out.Assets = append(out.Assets, *asset)
 				if alt == "" {
-					alt = target
+					alt = filepath.Base(target)
 				}
+				href := relPathFromNote(noteDir, asset.DeviceRel, opts.SourceRel)
+				if isImageExt(ext) {
+					return fmt.Sprintf("![%s](%s)", alt, href)
+				}
+				return fmt.Sprintf("[%s](%s)", alt, href)
+			}
+			out.Warnings = append(out.Warnings, fmt.Sprintf("missing attachment %s: %v", target, err))
+			if alt == "" {
+				alt = target
+			}
+			if isImageExt(ext) {
 				return fmt.Sprintf("![%s](%s)", alt, target)
 			}
-			out.Assets = append(out.Assets, *asset)
-			if alt == "" {
-				alt = filepath.Base(target)
-			}
-			href := relPathFromNote(noteDir, asset.DeviceRel, opts.SourceRel)
-			return fmt.Sprintf("![%s](%s)", alt, href)
+			return fmt.Sprintf("[%s](%s)", alt, target)
 		}
 
 		resolved, ok := resolveNote(target, opts.NoteIndex)
@@ -220,10 +227,7 @@ func resolveAsset(target, noteDir string, opts NormalizeOpts) (*AssetRef, error)
 
 	if opts.AssetOutDir != "" {
 		dest := filepath.Join(opts.AssetOutDir, prefix, name)
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return nil, err
-		}
-		if err := os.WriteFile(dest, data, 0o644); err != nil {
+		if err := copyFileToDir(found, dest); err != nil {
 			return nil, err
 		}
 	}
@@ -233,6 +237,24 @@ func resolveAsset(target, noteDir string, opts NormalizeOpts) (*AssetRef, error)
 		DeviceRel:  deviceRel,
 		HashPrefix: prefix,
 	}, nil
+}
+
+func copyFileToDir(src, dest string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
 
 func relPathFromNote(noteDir, target, sourceRel string) string {

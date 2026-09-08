@@ -78,3 +78,60 @@ func TestResolveAssetFromObsidianAttachmentFolder(t *testing.T) {
 		t.Fatalf("SourceAbs = %q", asset.SourceAbs)
 	}
 }
+
+func TestNormalizeCopiesReferencedPDF(t *testing.T) {
+	dir := t.TempDir()
+	wiki := filepath.Join(dir, "wiki", "entities")
+	attach := filepath.Join(dir, "attachments")
+	out := filepath.Join(dir, "out", "assets")
+	if err := os.MkdirAll(wiki, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(attach, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pdfPath := filepath.Join(attach, "paper.pdf")
+	if err := os.WriteFile(pdfPath, []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	notePath := filepath.Join(wiki, "note.md")
+	if err := os.WriteFile(notePath, []byte("See ![[paper.pdf]]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	norm, err := Normalize(notePath, "entities/note.md", NormalizeOpts{
+		VaultRoot:        dir,
+		SourceRoot:       filepath.Join(dir, "wiki"),
+		SourceRel:        "wiki",
+		AssetsRoot:       "assets",
+		NoteIndex:        map[string]string{},
+		AttachmentFolder: attach,
+		AssetOutDir:      out,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(norm.Assets) != 1 {
+		t.Fatalf("assets = %d, want 1", len(norm.Assets))
+	}
+	if norm.Assets[0].SourceAbs != pdfPath {
+		t.Fatalf("SourceAbs = %q", norm.Assets[0].SourceAbs)
+	}
+	copied, err := os.ReadFile(filepath.Join(out, norm.Assets[0].HashPrefix, filepath.Base(norm.Assets[0].DeviceRel)))
+	if err != nil {
+		t.Fatalf("copied attachment missing: %v", err)
+	}
+	if string(copied) != "%PDF-1.4" {
+		t.Fatalf("copied content = %q", copied)
+	}
+	src, err := os.ReadFile(notePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(src) != "See ![[paper.pdf]]\n" {
+		t.Fatal("source note was modified")
+	}
+}

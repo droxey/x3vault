@@ -16,6 +16,8 @@ Canonical repo: [github.com/droxey/x3vault](https://github.com/droxey/x3vault)
 
 ## Quick start
 
+Build copies every discovered wiki note (normalized for the device) and every referenced attachment from the Obsidian vault into `build_root/current/`. Source files are never modified.
+
 ```bash
 go build -o bin/x3vault ./cmd/x3vault
 
@@ -103,6 +105,7 @@ Sync compares **SHA-256 content hashes** when `sync.hash_manifest` is enabled. A
 
 ## Safety
 
-- One-way only. Vault is never written except `.x3vault.yaml` via `config` commands.
+- **Obsidian vault is read-only.** x3vault never modifies `wiki/`, attachments, or `.obsidian/`. Build reads source notes and copies referenced attachments into `build_root/current/` only.
+- One-way only. The only vault writes are `.x3vault.yaml` (via `config` commands) and build output under `build_root`.
 - Deletes only under the configured owned `device.root` after ownership marker is present.
 - `_meta/` is never deleted by sync.

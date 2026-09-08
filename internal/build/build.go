@@ -30,11 +30,21 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 	wikiOut := filepath.Join(staging, cfg.SourceRoot)
 	assetOut := filepath.Join(staging, cfg.Build.AssetsRoot)
 
+	write := func(path string) error {
+		return vault.AssertBuildWritePath(path, cfg.BuildRoot)
+	}
+
 	_ = os.RemoveAll(staging)
 	if err := os.MkdirAll(wikiOut, 0o755); err != nil {
 		return nil, err
 	}
+	if err := write(wikiOut); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(assetOut, 0o755); err != nil {
+		return nil, err
+	}
+	if err := write(assetOut); err != nil {
 		return nil, err
 	}
 
@@ -73,6 +83,10 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 		}
 
 		dest := filepath.Join(wikiOut, n.RelPath)
+		if err := write(dest); err != nil {
+			res.Errors = append(res.Errors, err.Error())
+			continue
+		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			res.Errors = append(res.Errors, err.Error())
 			continue
@@ -104,7 +118,11 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 
 	manifest := fmt.Sprintf("generation: %s\nnotes: %d\nassets: %d\nbuilt: %s\n",
 		gen, res.Notes, res.Assets, time.Now().UTC().Format(time.RFC3339))
-	_ = os.WriteFile(filepath.Join(staging, "build.manifest"), []byte(manifest), 0o644)
+	manifestPath := filepath.Join(staging, "build.manifest")
+	if err := write(manifestPath); err != nil {
+		return res, err
+	}
+	_ = os.WriteFile(manifestPath, []byte(manifest), 0o644)
 
 	current := filepath.Join(cfg.BuildRoot, "current")
 	_ = os.RemoveAll(current)
