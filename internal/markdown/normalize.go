@@ -131,6 +131,23 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 		}
 		target, heading, label := parseWikilink(sub[1])
 
+		if ext := strings.ToLower(filepath.Ext(target)); ext != "" && ext != ".md" {
+			asset, err := resolveAsset(target, noteDir, opts)
+			if err == nil {
+				out.Assets = append(out.Assets, *asset)
+				if label == "" {
+					label = filepath.Base(target)
+				}
+				href := relPathFromNote(noteDir, asset.DeviceRel, opts.SourceRel)
+				return fmtMarkdownLink(label, href)
+			}
+			out.Warnings = append(out.Warnings, fmt.Sprintf("missing attachment %s: %v", target, err))
+			if label == "" {
+				label = target
+			}
+			return fmt.Sprintf("[%s](%s)", label, target)
+		}
+
 		resolved, ok := resolveNote(target, opts.NoteIndex)
 		if !ok {
 			out.Unresolved = append(out.Unresolved, target)
@@ -188,11 +205,18 @@ func assetCandidates(target, noteDir string, opts NormalizeOpts) []string {
 		if p == "" {
 			return
 		}
-		if opts.ShouldIncludeSourceRel != nil {
-			if rel, err := filepath.Rel(opts.SourceRoot, p); err == nil {
-				rel = filepath.ToSlash(rel)
-				if !opts.ShouldIncludeSourceRel(rel) {
-					return
+		if pathUnderDir(p, opts.AttachmentFolder) {
+			c = append(c, p)
+			return
+		}
+		if pathUnderDir(p, opts.SourceRoot) {
+			if opts.ShouldIncludeSourceRel != nil {
+				rel, err := filepath.Rel(opts.SourceRoot, p)
+				if err == nil {
+					rel = filepath.ToSlash(rel)
+					if !opts.ShouldIncludeSourceRel(rel) {
+						return
+					}
 				}
 			}
 		}
@@ -220,6 +244,26 @@ func assetCandidates(target, noteDir string, opts NormalizeOpts) []string {
 	return c
 }
 
+func pathUnderDir(path, dir string) bool {
+	if dir == "" {
+		return false
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	dirAbs, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(dirAbs, pathAbs)
+	if err != nil {
+		return false
+	}
+	rel = filepath.ToSlash(rel)
+	return rel != ".." && !strings.HasPrefix(rel, "../")
+}
+
 func resolveAsset(target, noteDir string, opts NormalizeOpts) (*AssetRef, error) {
 	candidates := assetCandidates(target, noteDir, opts)
 	var found string
@@ -232,11 +276,10 @@ func resolveAsset(target, noteDir string, opts NormalizeOpts) (*AssetRef, error)
 	if found == "" {
 		return nil, fmt.Errorf("not found")
 	}
-	if opts.ShouldIncludeSourceRel != nil {
-		if rel, err := filepath.Rel(opts.SourceRoot, found); err == nil {
-			if !opts.ShouldIncludeSourceRel(filepath.ToSlash(rel)) {
-				return nil, fmt.Errorf("ignored directory")
-			}
+	if opts.ShouldIncludeSourceRel != nil && pathUnderDir(found, opts.SourceRoot) {
+		rel, err := filepath.Rel(opts.SourceRoot, found)
+		if err == nil && !opts.ShouldIncludeSourceRel(filepath.ToSlash(rel)) {
+			return nil, fmt.Errorf("ignored directory")
 		}
 	}
 

@@ -89,3 +89,15 @@ func TestRestoreDefaultsPreservingVault(t *testing.T) {
 		t.Fatalf("device.root = %q", cfg.Device.Root)
 	}
 }
+
+func TestResolveAttachmentFolderEmptyByDefault(t *testing.T) {
+	vault := t.TempDir()
+	cfg := Default()
+	cfg.VaultRoot = vault
+	if err := cfg.Resolve(ConfigPath(vault)); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ResolveAttachmentFolderAbs(); got != "" {
+		t.Fatalf("ResolveAttachmentFolderAbs() = %q, want empty", got)
+	}
+}

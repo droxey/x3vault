@@ -519,6 +519,15 @@ func emit(res *contract.Result, jsonOut bool) {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(res)
+		return
+	}
+	for _, d := range res.Diagnostics {
+		prefix := d.Level + ": "
+		if d.Path != "" {
+			fmt.Fprintf(os.Stderr, "%s%s (%s)\n", prefix, d.Message, d.Path)
+		} else {
+			fmt.Fprintf(os.Stderr, "%s%s\n", prefix, d.Message)
+		}
 	}
 }
 

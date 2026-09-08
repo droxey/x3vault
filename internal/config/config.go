@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/droxey/x3vault/internal/obsidian"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,6 +22,7 @@ const (
 	LegacyConfigFileName         = ".x3vault.yaml"
 	EreaderDirName               = "ereader"
 	DefaultBuildRootRel          = "../ereader/build"
+	DefaultAssetsRoot            = "assets"
 	DefaultDeviceRoot            = "/ereader"
 	DefaultOwnershipTool         = "ereader"
 )
@@ -59,7 +61,7 @@ type Config struct {
 
 func DefaultBuild() BuildConfig {
 	return BuildConfig{
-		AssetsRoot:         "assets",
+		AssetsRoot:         DefaultAssetsRoot,
 		AttachmentFolder:   "",
 		ReadObsidianConfig: true,
 	}
@@ -325,6 +327,20 @@ func ResolveConfigPath(vaultRoot string) string {
 
 func (c *Config) SourceDir() string {
 	return filepath.Join(c.VaultRoot, c.SourceRoot)
+}
+
+// ResolveAttachmentFolderAbs returns the vault directory Obsidian (or config) uses
+// for bare embed names like ![[paper.pdf]]. Empty when unset.
+func (c *Config) ResolveAttachmentFolderAbs() string {
+	if c.Build.ReadObsidianConfig {
+		if rel := obsidian.AttachmentFolder(c.VaultRoot); rel != "" {
+			return obsidian.ResolveAttachmentPath(c.VaultRoot, rel)
+		}
+	}
+	if c.Build.AttachmentFolder != "" {
+		return filepath.Join(c.VaultRoot, filepath.FromSlash(c.Build.AttachmentFolder))
+	}
+	return ""
 }
 
 func WriteDefault(path string) error {

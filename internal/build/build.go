@@ -13,7 +13,6 @@ import (
 
 	"github.com/droxey/x3vault/internal/config"
 	"github.com/droxey/x3vault/internal/markdown"
-	"github.com/droxey/x3vault/internal/obsidian"
 	"github.com/droxey/x3vault/internal/vault"
 )
 
@@ -26,7 +25,14 @@ type Result struct {
 	StagingDir string
 }
 
+const buildCurrentDir = "current"
+const buildBackupDir = "backup"
+
 func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
+	if err := backupCurrentBuild(cfg.BuildRoot); err != nil {
+		return nil, err
+	}
+
 	staging := filepath.Join(cfg.BuildRoot, "staging")
 	wikiOut := filepath.Join(staging, cfg.SourceRoot)
 	assetOut := filepath.Join(staging, cfg.Build.AssetsRoot)
@@ -54,7 +60,7 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 		noteRefs[i] = markdown.NoteRef{RelPath: n.RelPath, AbsPath: n.AbsPath}
 	}
 	indexResult := markdown.BuildNoteIndex(noteRefs)
-	attachmentAbs := resolveAttachmentFolder(cfg)
+	attachmentAbs := cfg.ResolveAttachmentFolderAbs()
 	wikiDirs := cfg.Wiki
 	wikiDirs.Normalize()
 
@@ -127,8 +133,7 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 	}
 	_ = os.WriteFile(manifestPath, []byte(manifest), 0o644)
 
-	current := filepath.Join(cfg.BuildRoot, "current")
-	_ = os.RemoveAll(current)
+	current := filepath.Join(cfg.BuildRoot, buildCurrentDir)
 	if err := os.Rename(staging, current); err != nil {
 		return res, fmt.Errorf("promote staging: %w", err)
 	}
@@ -136,15 +141,23 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 	return res, nil
 }
 
-func resolveAttachmentFolder(cfg *config.Config) string {
-	if cfg.Build.AttachmentFolder != "" {
-		return filepath.Join(cfg.VaultRoot, filepath.FromSlash(cfg.Build.AttachmentFolder))
+// backupCurrentBuild moves build/current to build/backup before a new build.
+func backupCurrentBuild(buildRoot string) error {
+	current := filepath.Join(buildRoot, buildCurrentDir)
+	if _, err := os.Stat(current); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat current build: %w", err)
 	}
-	if !cfg.Build.ReadObsidianConfig {
-		return ""
+	backup := filepath.Join(buildRoot, buildBackupDir)
+	if err := os.RemoveAll(backup); err != nil {
+		return fmt.Errorf("remove old backup: %w", err)
 	}
-	rel := obsidian.AttachmentFolder(cfg.VaultRoot)
-	return obsidian.ResolveAttachmentPath(cfg.VaultRoot, rel)
+	if err := os.Rename(current, backup); err != nil {
+		return fmt.Errorf("backup current build: %w", err)
+	}
+	return nil
 }
 
 // pruneIgnoredOutput removes any files or directories under ignored_dirs from build output.
