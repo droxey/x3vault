@@ -16,6 +16,7 @@ import (
 	"github.com/droxey/x3vault/internal/config"
 )
 
+// mockDevice implements a minimal Witch Reader HTTP API for tests.
 type mockDevice struct {
 	mu      sync.Mutex
 	dirs    map[string]bool
@@ -85,29 +86,23 @@ func (m *mockDevice) handler(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		parent := r.Form.Get("path")
 		name := r.Form.Get("name")
-		m.dirs[parent+"/"+name] = true
+		if parent == "" {
+			parent = "/"
+		}
+		m.dirs[strings.TrimSuffix(filepath.Join(parent, name), "/")] = true
 		w.WriteHeader(http.StatusOK)
-	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/upload"):
-		path := r.URL.Query().Get("path")
-		file, _, err := r.FormFile("file")
+	case r.Method == http.MethodPost && r.URL.Path == "/upload":
+		dir := r.URL.Query().Get("path")
+		file, header, err := r.FormFile("file")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		data, _ := io.ReadAll(file)
 		_ = file.Close()
-		filename := filepath.Base(r.URL.Query().Get("name"))
-		if filename == "." {
-			filename = "upload"
-		}
-		for k := range r.MultipartForm.File {
-			if len(r.MultipartForm.File[k]) > 0 {
-				filename = r.MultipartForm.File[k][0].Filename
-			}
-		}
-		full := strings.TrimSuffix(path, "/") + "/" + filename
-		m.files[full] = data
-		m.uploads = append(m.uploads, full)
+		p := filepath.Join(dir, header.Filename)
+		m.files[p] = data
+		m.uploads = append(m.uploads, p)
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodPost && r.URL.Path == "/delete":
 		_ = r.ParseForm()
@@ -119,8 +114,8 @@ func (m *mockDevice) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodGet && r.URL.Path == "/download":
-		path := r.URL.Query().Get("path")
-		data, ok := m.files[path]
+		p := r.URL.Query().Get("path")
+		data, ok := m.files[p]
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -141,6 +136,12 @@ func TestDeviceInitAndSyncPlan(t *testing.T) {
 	if err := DeviceInit(ctx, tr, "/ereader", "ereader"); err != nil {
 		t.Fatalf("DeviceInit: %v", err)
 	}
+	if !dev.dirs["/ereader/_meta"] {
+		t.Fatal("expected /ereader/_meta dir")
+	}
+	if _, ok := dev.files["/ereader/_meta/ownership.json"]; !ok {
+		t.Fatal("expected ownership.json uploaded")
+	}
 	owned, err := HasOwnership(ctx, tr, "/ereader")
 	if err != nil {
 		t.Fatalf("HasOwnership: %v", err)
@@ -150,19 +151,22 @@ func TestDeviceInitAndSyncPlan(t *testing.T) {
 	}
 
 	local := t.TempDir()
-	wikiDir := filepath.Join(local, "wiki")
-	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+	wiki := filepath.Join(local, "wiki")
+	if err := os.MkdirAll(wiki, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(wikiDir, "index.md"), []byte("# Index\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(wiki, "index.md"), []byte("# Index\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	cfg := config.Default()
-	opts := OptionsFromConfig(cfg)
-	opts.DeviceRoot = "/ereader"
-	opts.Progress = io.Discard
-
+	opts := Options{
+		DeviceRoot:     "/ereader",
+		FailFast:       true,
+		HashManifest:   true,
+		CleanEmptyDirs: true,
+		OwnershipTool:  config.DefaultOwnershipTool,
+		Progress:       io.Discard,
+	}
 	plan, err := BuildPlan(ctx, tr, opts.DeviceRoot, local, opts)
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
@@ -172,7 +176,7 @@ func TestDeviceInitAndSyncPlan(t *testing.T) {
 	}
 
 	res := ApplyPlan(ctx, tr, plan, local, false, opts)
-	if len(res.Errors) > 0 {
+	if len(res.Errors) != 0 {
 		t.Fatalf("ApplyPlan errors: %v", res.Errors)
 	}
 	if res.Uploaded == 0 {

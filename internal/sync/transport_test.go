@@ -18,7 +18,7 @@ func TestTransportStatus(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(Status{
 			Version: "1.0",
 			Device:  "X3",
-			IP:      "192.168.1.10",
+			IP:      "192.168.1.50",
 			Mode:    "transfer",
 		})
 	}))
@@ -29,7 +29,7 @@ func TestTransportStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Device != "X3" || st.Mode != "transfer" {
+	if st.Device != "X3" || st.IP != "192.168.1.50" || st.Mode != "transfer" {
 		t.Fatalf("status = %+v", st)
 	}
 }
