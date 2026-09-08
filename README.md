@@ -26,15 +26,17 @@ For vault at `/path/to/llmwiki-vault/`:
 
 ```
 /path/to/
-├── llmwiki-vault/          ← Obsidian vault (read-only to x3vault)
-│   ├── .ereader.yaml
+├── llmwiki-vault/              ← Obsidian vault (read-only to x3vault)
+│   ├── .xte/config.yaml        ← program config (only vault write)
 │   └── wiki/
-└── ereader/build/current/  ← build output (default build_root)
-    ├── wiki/               ← normalized notes
+└── ereader/build/current/      ← build output (default build_root)
+    ├── wiki/                   ← normalized notes
     │   └── entities/note.md
-    └── assets/             ← referenced attachments
+    └── assets/                 ← referenced attachments
         └── ab12/paper.pdf
 ```
+
+`build_root` may be set to any path **outside** the Obsidian vault. It must not lie inside the vault or its subfolders (including `wiki/`, `.obsidian/`, etc.).
 
 ```bash
 go build -o bin/x3vault ./cmd/x3vault
@@ -63,7 +65,7 @@ wiki/
 
 **Directory policy (default):** `all_except_ignored` — every subdirectory under `source_root` is synced **except** ignored ones. Ignored directories are never written to build output, even when linked or embedded from other notes.
 
-**Never synced by default:** paths in `sync.exclude_vault_paths` (`raw`, `.obsidian`, `.git`), plus ignored wiki dirs (`script/`, `references/`).
+**Never synced by default:** paths in `sync.exclude_vault_paths` (`raw`, `.obsidian`, `.git`, `.xte`), plus ignored wiki dirs (`script/`, `references/`).
 
 ```bash
 ./bin/x3vault config show                            # full config YAML
@@ -76,13 +78,13 @@ wiki/
 
 ## Config reference
 
-All settings live in `.ereader.yaml` at the vault root (legacy `.xte.yaml` and `.x3vault.yaml` are still read if present).
+All settings live in `.xte/config.yaml` inside the vault (legacy `.ereader.yaml`, `.xte.yaml`, and `.x3vault.yaml` at vault root are still read if present).
 
 ```yaml
 schema: 1
 vault_root: .
 source_root: wiki              # compiled wiki source (relative to vault_root)
-build_root: ../ereader/build   # alongside vault; resolves to ../ereader/build/current at sync
+build_root: ../ereader/build   # default: sibling ereader/ folder; must be outside vault
 
 wiki:
   mode: all_except_ignored     # or whitelist
@@ -108,6 +110,7 @@ sync:
     - raw
     - .obsidian
     - .git
+    - .xte
 
 device:
   base_url: http://crosspoint.local
@@ -123,7 +126,7 @@ Sync compares **SHA-256 content hashes** when `sync.hash_manifest` is enabled. A
 ## Safety
 
 - **Obsidian vault is read-only.** x3vault never modifies `wiki/`, attachments, or `.obsidian/`. Build output lives in `build_root/` (default `../ereader/build/current/`), outside the vault.
-- One-way only. The only write inside the vault is `.ereader.yaml` (via `config` commands).
+- One-way only. The only program write inside the vault is `.xte/config.yaml` (via `init` / `config` commands).
 - Deletes only under the configured owned `device.root` after ownership marker is present.
 - `_meta/` is never deleted by sync.
 
@@ -133,7 +136,7 @@ Sync compares **SHA-256 content hashes** when `sync.hash_manifest` is enabled. A
 
 **Merge with `main`:** Conflicts resolved in favor of this branch's `all_except_ignored` directory policy (main's merged PR #1 used whitelist-by-default `allowed_dirs`). Custom wiki folders sync automatically without `config dirs allow`.
 
-**Path rename:** Tooling paths use `.ereader.yaml`, `../ereader/build`, and `/ereader` on device (legacy `.xte.yaml` and `.x3vault.yaml` still loaded).
+**Paths:** Program config in `.xte/config.yaml` (vault root). Build output default `../ereader/build` (sibling folder). `build_root` must stay outside the vault. Legacy root-level config files still loaded.
 
 **Obsidian vault:** Never modified. Build copies all discovered wiki notes and referenced attachments to `../ereader/build/current/`; sync mirrors to the device.
 

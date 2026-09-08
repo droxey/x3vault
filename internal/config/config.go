@@ -14,13 +14,15 @@ const SchemaVersion = 1
 
 // Tool paths and device defaults.
 const (
-	ConfigFileName           = ".ereader.yaml"
-	LegacyXTEConfigFileName  = ".xte.yaml"
-	LegacyConfigFileName     = ".x3vault.yaml"
-	EreaderDirName           = "ereader"
-	DefaultBuildRootRel      = "../ereader/build"
-	DefaultDeviceRoot        = "/ereader"
-	DefaultOwnershipTool     = "ereader"
+	ConfigDirName                = ".xte"
+	ConfigFileBasename           = "config.yaml"
+	LegacyEreaderConfigFileName  = ".ereader.yaml"
+	LegacyXTEConfigFileName      = ".xte.yaml"
+	LegacyConfigFileName         = ".x3vault.yaml"
+	EreaderDirName               = "ereader"
+	DefaultBuildRootRel          = "../ereader/build"
+	DefaultDeviceRoot            = "/ereader"
+	DefaultOwnershipTool         = "ereader"
 )
 
 type BuildConfig struct {
@@ -68,7 +70,7 @@ func DefaultSync() SyncConfig {
 		FailFast:          true,
 		HashManifest:      true,
 		CleanEmptyDirs:    true,
-		ExcludeVaultPaths: []string{"raw", ".obsidian", ".git", ".x3vault"},
+		ExcludeVaultPaths: []string{"raw", ".obsidian", ".git", ".x3vault", ConfigDirName},
 	}
 }
 
@@ -168,7 +170,43 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Device.BaseURL) == "" {
 		return fmt.Errorf("device.base_url must not be empty")
 	}
-	return validateDeviceRoot(c.Device.Root)
+	if err := validateDeviceRoot(c.Device.Root); err != nil {
+		return err
+	}
+	return validateBuildRootRef(c.BuildRoot)
+}
+
+func validateBuildRootRef(buildRoot string) error {
+	buildRoot = strings.TrimSpace(buildRoot)
+	if buildRoot == "" {
+		return fmt.Errorf("build_root must not be empty")
+	}
+	return nil
+}
+
+func validateBuildRootOutsideVault(buildRoot, vaultRoot string) error {
+	buildAbs, err := filepath.Abs(buildRoot)
+	if err != nil {
+		return fmt.Errorf("build_root abs: %w", err)
+	}
+	vaultAbs, err := filepath.Abs(vaultRoot)
+	if err != nil {
+		return fmt.Errorf("vault_root abs: %w", err)
+	}
+	if pathContainedIn(buildAbs, vaultAbs) {
+		return fmt.Errorf("build_root must not be inside the Obsidian vault (%s)", vaultAbs)
+	}
+	return nil
+}
+
+func pathContainedIn(child, parent string) bool {
+	child = filepath.Clean(child)
+	parent = filepath.Clean(parent)
+	if child == parent {
+		return true
+	}
+	sep := string(os.PathSeparator)
+	return strings.HasPrefix(child, parent+sep)
 }
 
 func validateRelPath(p, field string) error {
@@ -232,9 +270,9 @@ func (c *Config) RestoreDefaultsPreservingVault() {
 }
 
 func (c *Config) Resolve(configPath string) error {
-	base := filepath.Dir(configPath)
+	vaultBase := VaultRootFromConfigPath(configPath)
 	if !filepath.IsAbs(c.VaultRoot) {
-		c.VaultRoot = filepath.Join(base, c.VaultRoot)
+		c.VaultRoot = filepath.Join(vaultBase, c.VaultRoot)
 	}
 	abs, err := filepath.Abs(c.VaultRoot)
 	if err != nil {
@@ -250,23 +288,39 @@ func (c *Config) Resolve(configPath string) error {
 		return fmt.Errorf("build_root abs: %w", err)
 	}
 	c.BuildRoot = buildAbs
-	return nil
+	return validateBuildRootOutsideVault(c.BuildRoot, c.VaultRoot)
+}
+
+func VaultRootFromConfigPath(configPath string) string {
+	abs, err := filepath.Abs(configPath)
+	if err != nil {
+		abs = configPath
+	}
+	dir := filepath.Dir(abs)
+	if filepath.Base(dir) == ConfigDirName {
+		return filepath.Dir(dir)
+	}
+	return dir
 }
 
 func ConfigPath(vaultRoot string) string {
-	return filepath.Join(vaultRoot, ConfigFileName)
+	return filepath.Join(vaultRoot, ConfigDirName, ConfigFileBasename)
 }
 
-// ResolveConfigPath returns the config file to use, preferring .ereader.yaml with
-// fallbacks to legacy .xte.yaml and .x3vault.yaml when present.
+// ResolveConfigPath returns the config file to use, preferring .xte/config.yaml with
+// fallbacks to legacy vault-root config files when present.
 func ResolveConfigPath(vaultRoot string) string {
-	for _, name := range []string{ConfigFileName, LegacyXTEConfigFileName, LegacyConfigFileName} {
+	primary := ConfigPath(vaultRoot)
+	if _, err := os.Stat(primary); err == nil {
+		return primary
+	}
+	for _, name := range []string{LegacyEreaderConfigFileName, LegacyXTEConfigFileName, LegacyConfigFileName} {
 		p := filepath.Join(vaultRoot, name)
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
-	return ConfigPath(vaultRoot)
+	return primary
 }
 
 func (c *Config) SourceDir() string {
