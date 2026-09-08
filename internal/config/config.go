@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/droxey/x3vault/internal/obsidian"
+	"github.com/droxey/x3vault/internal/pathutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -146,7 +147,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("source_root must not be empty")
 	}
 	if strings.Contains(c.SourceRoot, "..") {
-		return fmt.Errorf("source_root must not contain ..")
+		return fmt.Errorf("source_root must not contain parent path segments")
 	}
 	if err := c.Wiki.Validate(); err != nil {
 		return fmt.Errorf("wiki: %w", err)
@@ -190,20 +191,10 @@ func validateBuildRootOutsideVault(buildRoot, vaultRoot string) error {
 	if err != nil {
 		return fmt.Errorf("vault_root abs: %w", err)
 	}
-	if pathContainedIn(buildAbs, vaultAbs) {
+	if pathutil.ContainedIn(buildAbs, vaultAbs) {
 		return fmt.Errorf("build_root must not be inside the Obsidian vault (%s)", vaultAbs)
 	}
 	return nil
-}
-
-func pathContainedIn(child, parent string) bool {
-	child = filepath.Clean(child)
-	parent = filepath.Clean(parent)
-	if child == parent {
-		return true
-	}
-	sep := string(os.PathSeparator)
-	return strings.HasPrefix(child, parent+sep)
 }
 
 func validateRelPath(p, field string) error {
@@ -215,7 +206,7 @@ func validateRelPath(p, field string) error {
 		return fmt.Errorf("%s must be relative", field)
 	}
 	if strings.Contains(p, "..") {
-		return fmt.Errorf("%s must not contain ..", field)
+		return fmt.Errorf("%s must not contain parent path segments", field)
 	}
 	return nil
 }

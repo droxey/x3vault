@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/droxey/x3vault/internal/config"
+	"github.com/droxey/x3vault/internal/pathutil"
 )
 
 type Note struct {
@@ -41,7 +42,7 @@ func Discover(vaultRoot, sourceRel string, dirs config.WikiDirs) (*Discovery, er
 	if err != nil {
 		sourceCanon = sourceAbs
 	}
-	if !pathContainedIn(sourceCanon, vaultCanon) {
+	if !pathutil.ContainedIn(sourceCanon, vaultCanon) {
 		return nil, fmt.Errorf("source escapes vault root")
 	}
 
@@ -101,14 +102,4 @@ func Discover(vaultRoot, sourceRel string, dirs config.WikiDirs) (*Discovery, er
 		SourceRoot: sourceAbs,
 		Notes:      notes,
 	}, nil
-}
-
-func pathContainedIn(child, parent string) bool {
-	child = filepath.Clean(child)
-	parent = filepath.Clean(parent)
-	if child == parent {
-		return true
-	}
-	sep := string(os.PathSeparator)
-	return strings.HasPrefix(child, parent+sep)
 }

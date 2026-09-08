@@ -1,6 +1,10 @@
 package sync
 
-import "github.com/droxey/x3vault/internal/config"
+import (
+	"io"
+
+	"github.com/droxey/x3vault/internal/config"
+)
 
 type Options struct {
 	DeviceRoot     string
@@ -8,6 +12,7 @@ type Options struct {
 	FailFast       bool
 	HashManifest   bool
 	CleanEmptyDirs bool
+	Progress       io.Writer
 }
 
 func OptionsFromConfig(cfg *config.Config) Options {

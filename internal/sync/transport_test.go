@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -24,11 +25,11 @@ func TestTransportStatus(t *testing.T) {
 	defer srv.Close()
 
 	tr := NewTransport(srv.URL, 5*time.Second)
-	st, err := tr.Status()
+	st, err := tr.Status(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Device != "X3" || st.IP != "192.168.1.50" {
+	if st.Device != "X3" || st.IP != "192.168.1.50" || st.Mode != "transfer" {
 		t.Fatalf("status = %+v", st)
 	}
 }

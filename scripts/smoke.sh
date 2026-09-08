@@ -16,6 +16,7 @@ echo '# Index' > "$VAULT/wiki/index.md"
 x3vault init --vault "$VAULT" >/dev/null
 x3vault build --vault "$VAULT" >/dev/null
 x3vault doctor --vault "$VAULT" >/dev/null
+x3vault version | grep -q x3vault
 
 BUILD_CURRENT="$(dirname "$VAULT")/ereader/build/current"
 test -f "$BUILD_CURRENT/wiki/index.md"

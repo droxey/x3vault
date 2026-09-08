@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -28,13 +29,22 @@ type Result struct {
 const buildCurrentDir = "current"
 const buildBackupDir = "backup"
 
-func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
+type RunOptions struct {
+	Progress io.Writer
+}
+
+func Run(cfg *config.Config, disc *vault.Discovery, opts RunOptions) (*Result, error) {
+	progress := opts.Progress
+	if progress == nil {
+		progress = io.Discard
+	}
+
 	backedUp, err := backupCurrentBuild(cfg.BuildRoot)
 	if err != nil {
 		return nil, err
 	}
 	if backedUp {
-		fmt.Fprintf(os.Stderr, "backed up previous build to %s\n", filepath.Join(cfg.BuildRoot, buildBackupDir))
+		fmt.Fprintf(progress, "backed up previous build to %s\n", filepath.Join(cfg.BuildRoot, buildBackupDir))
 	}
 	promoted := false
 	if backedUp {
@@ -77,7 +87,7 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 	wikiDirs := cfg.Wiki
 	wikiDirs.Normalize()
 
-	opts := markdown.NormalizeOpts{
+	normOpts := markdown.NormalizeOpts{
 		VaultRoot:              cfg.VaultRoot,
 		SourceRoot:             disc.SourceRoot,
 		SourceRel:              cfg.SourceRoot,
@@ -93,7 +103,7 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 	assetSeen := map[string]bool{}
 
 	for _, n := range disc.Notes {
-		norm, err := markdown.Normalize(n.AbsPath, n.RelPath, opts)
+		norm, err := markdown.Normalize(n.AbsPath, n.RelPath, normOpts)
 		if err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", n.RelPath, err))
 			continue
@@ -128,6 +138,10 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 		}
 	}
 
+	if len(res.Errors) > 0 {
+		return res, fmt.Errorf("build failed with %d note error(s)", len(res.Errors))
+	}
+
 	if err := pruneIgnoredOutput(wikiOut, wikiDirs); err != nil {
 		return res, fmt.Errorf("prune ignored output: %w", err)
 	}
@@ -144,7 +158,9 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 	if err := write(manifestPath); err != nil {
 		return res, err
 	}
-	_ = os.WriteFile(manifestPath, []byte(manifest), 0o644)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		return res, fmt.Errorf("write manifest: %w", err)
+	}
 
 	current := filepath.Join(cfg.BuildRoot, buildCurrentDir)
 	if err := os.Rename(staging, current); err != nil {

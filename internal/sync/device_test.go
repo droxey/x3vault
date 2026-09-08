@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -106,8 +107,11 @@ func (m *mockDevice) handler(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && r.URL.Path == "/delete":
 		_ = r.ParseForm()
 		p := r.Form.Get("path")
-		delete(m.files, p)
-		delete(m.dirs, p)
+		if r.Form.Get("type") == "directory" {
+			delete(m.dirs, p)
+		} else {
+			delete(m.files, p)
+		}
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodGet && r.URL.Path == "/download":
 		p := r.URL.Query().Get("path")
@@ -127,8 +131,9 @@ func TestDeviceInitAndSyncPlan(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(dev.handler))
 	defer srv.Close()
 
+	ctx := context.Background()
 	tr := NewTransport(srv.URL, 5*time.Second)
-	if err := DeviceInit(tr, "/ereader", "ereader"); err != nil {
+	if err := DeviceInit(ctx, tr, "/ereader", "ereader"); err != nil {
 		t.Fatalf("DeviceInit: %v", err)
 	}
 	if !dev.dirs["/ereader/_meta"] {
@@ -136,6 +141,13 @@ func TestDeviceInitAndSyncPlan(t *testing.T) {
 	}
 	if _, ok := dev.files["/ereader/_meta/ownership.json"]; !ok {
 		t.Fatal("expected ownership.json uploaded")
+	}
+	owned, err := HasOwnership(ctx, tr, "/ereader")
+	if err != nil {
+		t.Fatalf("HasOwnership: %v", err)
+	}
+	if !owned {
+		t.Fatal("expected ownership after init")
 	}
 
 	local := t.TempDir()
@@ -149,12 +161,13 @@ func TestDeviceInitAndSyncPlan(t *testing.T) {
 
 	opts := Options{
 		DeviceRoot:     "/ereader",
-		FailFast:         true,
-		HashManifest:     true,
-		CleanEmptyDirs:   true,
-		OwnershipTool:    config.DefaultOwnershipTool,
+		FailFast:       true,
+		HashManifest:   true,
+		CleanEmptyDirs: true,
+		OwnershipTool:  config.DefaultOwnershipTool,
+		Progress:       io.Discard,
 	}
-	plan, err := BuildPlan(tr, opts.DeviceRoot, local, opts)
+	plan, err := BuildPlan(ctx, tr, opts.DeviceRoot, local, opts)
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
@@ -162,11 +175,23 @@ func TestDeviceInitAndSyncPlan(t *testing.T) {
 		t.Fatal("expected uploads in plan")
 	}
 
-	res := ApplyPlan(tr, plan, local, false, opts)
+	res := ApplyPlan(ctx, tr, plan, local, false, opts)
 	if len(res.Errors) != 0 {
 		t.Fatalf("ApplyPlan errors: %v", res.Errors)
 	}
 	if res.Uploaded == 0 {
 		t.Fatal("expected uploads applied")
+	}
+}
+
+func TestHasOwnershipReturnsListError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "fail", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	tr := NewTransport(srv.URL, time.Second)
+	_, err := HasOwnership(context.Background(), tr, "/ereader")
+	if err == nil {
+		t.Fatal("expected error when list fails")
 	}
 }
