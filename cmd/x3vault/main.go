@@ -41,6 +41,8 @@ func main() {
 		runDoctor(args)
 	case "status":
 		runStatus(args)
+	case "config":
+		runConfig(args)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -51,7 +53,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprint(os.Stderr, `x3vault — slim v0: build + exact-mirror sync of Obsidian wiki/ to XTEINK X3
+	fmt.Fprint(os.Stderr, `x3vault — slim v0: build Obsidian wiki for XTE e-readers, sync to XTEINK
 
 Usage:
   x3vault init --vault PATH
@@ -60,8 +62,15 @@ Usage:
   x3vault sync [--vault PATH] [--dry-run]
   x3vault doctor [--vault PATH]
   x3vault status [--vault PATH]
-
-Options:
+  x3vault config show [--vault PATH]
+  x3vault config restore [--vault PATH]
+  x3vault config dirs [--vault PATH]
+  x3vault config dirs restore [--vault PATH]
+  x3vault config dirs ignore DIR... [--vault PATH]
+  x3vault config dirs unignore DIR... [--vault PATH]
+  x3vault config dirs allow DIR... [--vault PATH]   # switches to whitelist mode
+  x3vault config dirs unallow DIR... [--vault PATH]
+  x3vault config dirs ignore DIR... [--vault PATH]
   --vault PATH   Vault root (default: current directory or config)
   --dry-run      Print plan without mutating the device
   --json         Machine-readable output on stdout
@@ -103,7 +112,7 @@ func configPath(vault string) string {
 		cwd, _ := os.Getwd()
 		vault = cwd
 	}
-	return filepath.Join(vault, ".x3vault.yaml")
+	return config.ResolveConfigPath(vault)
 }
 
 func runInit(args []string) {
@@ -116,15 +125,16 @@ func runInit(args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	cfgPath := filepath.Join(abs, ".x3vault.yaml")
+	cfgPath := config.ConfigPath(abs)
 	if _, err := os.Stat(cfgPath); err == nil {
 		fmt.Fprintf(os.Stderr, "config already exists: %s\n", cfgPath)
 		os.Exit(0)
 	}
 
-	wiki := filepath.Join(abs, "wiki")
-	if st, err := os.Stat(wiki); err != nil || !st.IsDir() {
-		fmt.Fprintf(os.Stderr, "wiki/ not found under %s\n", abs)
+	def := config.Default()
+	sourceDir := filepath.Join(abs, def.SourceRoot)
+	if st, err := os.Stat(sourceDir); err != nil || !st.IsDir() {
+		fmt.Fprintf(os.Stderr, "%s/ not found under %s\n", def.SourceRoot, abs)
 		os.Exit(2)
 	}
 
@@ -132,7 +142,154 @@ func runInit(args []string) {
 		fatal(err)
 	}
 	fmt.Fprintf(os.Stderr, "wrote %s\n", cfgPath)
-	fmt.Fprintf(os.Stderr, "source: %s\n", wiki)
+	fmt.Fprintf(os.Stderr, "source: %s\n", sourceDir)
+	fmt.Fprintf(os.Stderr, "excluded vault paths: %s\n", strings.Join(def.Sync.ExcludeVaultPaths, ", "))
+	for _, d := range config.MissingStandardDirs(sourceDir, def.Wiki.StandardDirs) {
+		fmt.Fprintf(os.Stderr, "warning: %s/%s/ not found (standard LLM Wiki folder)\n", def.SourceRoot, d)
+	}
+	fmt.Fprint(os.Stderr, config.FormatWikiDirsSummary(config.DefaultWikiDirs()))
+}
+
+func runConfig(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: x3vault config show|restore|dirs ...")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "show":
+		runConfigShow(args[1:])
+	case "restore":
+		runConfigRestore(args[1:])
+	case "dirs":
+		runConfigDirs(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown config command: %s\n", args[0])
+		os.Exit(2)
+	}
+}
+
+func runConfigShow(args []string) {
+	cfg, err := loadConfig(flagVault(args))
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Fprint(os.Stdout, config.FormatConfigYAML(cfg))
+}
+
+func runConfigRestore(args []string) {
+	vaultPath := flagVault(args)
+	cfgPath := configPath(vaultPath)
+	_, err := config.UpdateConfig(cfgPath, func(cfg *config.Config) error {
+		cfg.RestoreDefaultsPreservingVault()
+		return nil
+	})
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Fprintln(os.Stderr, "restored default config (vault_root preserved)")
+	cfg, err := config.LoadFromPath(cfgPath)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Fprint(os.Stdout, config.FormatConfigYAML(cfg))
+}
+
+func runConfigDirs(args []string) {
+	vaultPath := flagVault(args)
+	cfgPath := configPath(vaultPath)
+
+	var tokens []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--vault" {
+			i++
+			continue
+		}
+		tokens = append(tokens, args[i])
+	}
+
+	if len(tokens) == 0 {
+		cfg, err := loadConfig(vaultPath)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprint(os.Stdout, config.FormatWikiDirsSummary(cfg.Wiki))
+		return
+	}
+
+	sub := tokens[0]
+	dirArgs := tokens[1:]
+
+	switch sub {
+	case "restore":
+		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
+			w.RestoreDefaults()
+			return nil
+		})
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprintln(os.Stderr, "restored LLM Wiki default directory rules")
+		cfg, err := config.LoadFromPath(cfgPath)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprint(os.Stdout, config.FormatWikiDirsSummary(cfg.Wiki))
+	case "allow":
+		if len(dirArgs) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs allow DIR...")
+			os.Exit(2)
+		}
+		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
+			w.AddAllowed(dirArgs...)
+			return w.Validate()
+		})
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "switched to whitelist mode; added allowed dirs: %s\n", strings.Join(dirArgs, ", "))
+	case "unallow":
+		if len(dirArgs) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs unallow DIR...")
+			os.Exit(2)
+		}
+		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
+			w.RemoveAllowed(dirArgs...)
+			return w.Validate()
+		})
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "removed allowed dirs: %s\n", strings.Join(dirArgs, ", "))
+	case "ignore":
+		if len(dirArgs) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs ignore DIR...")
+			os.Exit(2)
+		}
+		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
+			w.AddIgnored(dirArgs...)
+			return w.Validate()
+		})
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "added ignored dirs: %s\n", strings.Join(dirArgs, ", "))
+	case "unignore":
+		if len(dirArgs) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs unignore DIR...")
+			os.Exit(2)
+		}
+		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
+			w.RemoveIgnored(dirArgs...)
+			return w.Validate()
+		})
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "removed ignored dirs: %s\n", strings.Join(dirArgs, ", "))
+	default:
+		fmt.Fprintf(os.Stderr, "unknown config dirs command: %s\n", sub)
+		os.Exit(2)
+	}
 }
 
 func runBuild(args []string) {
@@ -146,7 +303,7 @@ func runBuild(args []string) {
 		os.Exit(2)
 	}
 
-	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot)
+	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot, cfg.Wiki)
 	if err != nil {
 		res.AddError(err.Error(), cfg.SourceDir())
 		emit(res, jsonOut)
@@ -155,7 +312,7 @@ func runBuild(args []string) {
 
 	fmt.Fprintf(os.Stderr, "discovered %d notes under %s\n", len(disc.Notes), disc.SourceRoot)
 
-	br, err := build.Run(cfg.VaultRoot, cfg.SourceRoot, cfg.BuildRoot, disc)
+	br, err := build.Run(cfg, disc)
 	if err != nil {
 		res.AddError(err.Error(), cfg.BuildRoot)
 		emit(res, jsonOut)
@@ -193,7 +350,7 @@ func runDeviceInit(args []string) {
 		os.Exit(2)
 	}
 
-	t := sync.NewTransport(cfg.Device.BaseURL)
+	t := syncTransport(cfg)
 	st, err := t.Status()
 	if err != nil {
 		res.AddError(err.Error(), "")
@@ -202,12 +359,13 @@ func runDeviceInit(args []string) {
 	}
 	fmt.Fprintf(os.Stderr, "device: %s  firmware: %s  mode: %s  ip: %s\n", st.Device, st.Version, st.Mode, st.IP)
 
-	if err := sync.DeviceInit(t, cfg.Device.Root); err != nil {
-		res.AddError(err.Error(), cfg.Device.Root)
+	opts := syncOpts(cfg)
+	if err := sync.DeviceInit(t, opts.DeviceRoot, opts.OwnershipTool); err != nil {
+		res.AddError(err.Error(), opts.DeviceRoot)
 		emit(res, jsonOut)
 		os.Exit(5)
 	}
-	fmt.Fprintf(os.Stderr, "ownership marker written at %s/_meta/ownership.json\n", cfg.Device.Root)
+	fmt.Fprintf(os.Stderr, "ownership marker written at %s/_meta/ownership.json\n", opts.DeviceRoot)
 	emit(res, jsonOut)
 }
 
@@ -230,7 +388,7 @@ func runSync(args []string) {
 		os.Exit(3)
 	}
 
-	t := sync.NewTransport(cfg.Device.BaseURL)
+	t := syncTransport(cfg)
 	st, err := t.Status()
 	if err != nil {
 		res.AddError(err.Error(), "")
@@ -239,19 +397,29 @@ func runSync(args []string) {
 	}
 	fmt.Fprintf(os.Stderr, "device: %s  firmware: %s  mode: %s\n", st.Device, st.Version, st.Mode)
 
-	plan, err := sync.BuildPlan(t, cfg.Device.Root, current)
+	opts := syncOpts(cfg)
+	plan, err := sync.BuildPlan(t, opts.DeviceRoot, current, opts)
 	if err != nil {
 		res.AddError(err.Error(), cfg.Device.Root)
 		emit(res, jsonOut)
 		os.Exit(5)
 	}
 
-	fmt.Fprintf(os.Stderr, "plan: %d uploads, %d deletes\n", len(plan.Uploads), len(plan.Deletes))
+	fileDeletes, dirDeletes := 0, 0
+	for _, op := range plan.Deletes {
+		if op.Type == "directory" {
+			dirDeletes++
+		} else {
+			fileDeletes++
+		}
+	}
+	fmt.Fprintf(os.Stderr, "plan: %d uploads, %d file deletes, %d dir deletes\n",
+		len(plan.Uploads), fileDeletes, dirDeletes)
 	if dry {
 		fmt.Fprintln(os.Stderr, "dry-run:")
 	}
 
-	sr := sync.ApplyPlan(t, plan, current, dry)
+	sr := sync.ApplyPlan(t, plan, current, dry, opts)
 	res.Summary.Notes = sr.Uploaded
 	for _, e := range sr.Errors {
 		res.AddError(e, "")
@@ -264,6 +432,7 @@ func runSync(args []string) {
 	}
 
 	if !res.OK {
+		fmt.Fprintln(os.Stderr, "sync failed (fail-fast; device may be partially updated)")
 		emit(res, jsonOut)
 		os.Exit(4)
 	}
@@ -281,7 +450,7 @@ func runDoctor(args []string) {
 		os.Exit(2)
 	}
 
-	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot)
+	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot, cfg.Wiki)
 	if err != nil {
 		res.AddError(err.Error(), cfg.SourceDir())
 		emit(res, jsonOut)
@@ -292,15 +461,19 @@ func runDoctor(args []string) {
 	fmt.Fprintf(os.Stderr, "vault:   %s\n", cfg.VaultRoot)
 	fmt.Fprintf(os.Stderr, "source:  %s\n", disc.SourceRoot)
 	fmt.Fprintf(os.Stderr, "notes:   %d\n", len(disc.Notes))
+	fmt.Fprintf(os.Stderr, "dirs:    allowed=%d ignored=%d\n", len(cfg.Wiki.Allowed), len(cfg.Wiki.Ignored))
 	fmt.Fprintf(os.Stderr, "build:   %s\n", cfg.BuildRoot)
-	fmt.Fprintf(os.Stderr, "device:  %s%s\n", cfg.Device.BaseURL, cfg.Device.Root)
+	fmt.Fprintf(os.Stderr, "device:  %s  root=%s  timeout=%s\n", cfg.Device.BaseURL, cfg.DeviceRoot(), cfg.DeviceTimeout())
+	fmt.Fprintf(os.Stderr, "sync:    fail_fast=%v hash_manifest=%v clean_empty_dirs=%v\n",
+		cfg.Sync.FailFast, cfg.Sync.HashManifest, cfg.Sync.CleanEmptyDirs)
+	fmt.Fprintf(os.Stderr, "exclude: %s\n", strings.Join(cfg.Sync.ExcludeVaultPaths, ", "))
 
-	t := sync.NewTransport(cfg.Device.BaseURL)
+	t := syncTransport(cfg)
 	if st, err := t.Status(); err != nil {
 		fmt.Fprintf(os.Stderr, "device:  unreachable (%s)\n", strings.TrimSpace(err.Error()))
 	} else {
 		fmt.Fprintf(os.Stderr, "device:  online %s/%s heap=%d\n", st.Device, st.Version, st.FreeHeap)
-		owned, _ := sync.HasOwnership(t, cfg.Device.Root)
+		owned, _ := sync.HasOwnership(t, cfg.DeviceRoot())
 		fmt.Fprintf(os.Stderr, "owned:   %v\n", owned)
 	}
 
@@ -309,6 +482,14 @@ func runDoctor(args []string) {
 
 func runStatus(args []string) {
 	runDoctor(args)
+}
+
+func syncTransport(cfg *config.Config) *sync.Transport {
+	return sync.NewTransport(cfg.Device.BaseURL, cfg.DeviceTimeout())
+}
+
+func syncOpts(cfg *config.Config) sync.Options {
+	return sync.OptionsFromConfig(cfg)
 }
 
 func loadConfig(vaultFlag string) (*config.Config, error) {

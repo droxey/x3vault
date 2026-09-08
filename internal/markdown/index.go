@@ -1,7 +1,6 @@
 package markdown
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,22 +12,16 @@ type NoteRef struct {
 }
 
 type IndexResult struct {
-	Index    map[string]string
-	Warnings []string
+	Index map[string]string
 }
 
 // BuildNoteIndex resolves Obsidian-style wikilink targets to note paths.
-// Keys include full path, path without extension, basename, title, and aliases.
+// Duplicate keys pick the last note seen (Obsidian-style silent resolution).
 func BuildNoteIndex(notes []NoteRef) IndexResult {
 	res := IndexResult{Index: make(map[string]string)}
-	add := func(key, rel, kind string) {
+	add := func(key, rel string) {
 		key = normalizeIndexKey(key)
 		if key == "" {
-			return
-		}
-		if existing, ok := res.Index[key]; ok && existing != rel {
-			res.Warnings = append(res.Warnings, fmt.Sprintf(
-				"ambiguous %s %q maps to both %s and %s", kind, key, existing, rel))
 			return
 		}
 		res.Index[key] = rel
@@ -36,9 +29,9 @@ func BuildNoteIndex(notes []NoteRef) IndexResult {
 
 	for _, n := range notes {
 		rel := filepath.ToSlash(n.RelPath)
-		add(rel, rel, "path")
-		add(strings.TrimSuffix(rel, ".md"), rel, "path")
-		add(strings.TrimSuffix(filepath.Base(rel), ".md"), rel, "basename")
+		add(rel, rel)
+		add(strings.TrimSuffix(rel, ".md"), rel)
+		add(strings.TrimSuffix(filepath.Base(rel), ".md"), rel)
 
 		raw, err := os.ReadFile(n.AbsPath)
 		if err != nil {
@@ -49,13 +42,13 @@ func BuildNoteIndex(notes []NoteRef) IndexResult {
 			fm := m[1]
 			title := extractYAMLString(fm, "title")
 			if title != "" {
-				add(title, rel, "title")
+				add(title, rel)
 			}
 			for _, alias := range extractYAMLList(fm, "aliases") {
-				add(alias, rel, "alias")
+				add(alias, rel)
 			}
 			for _, alias := range extractYAMLBlockList(fm, "aliases") {
-				add(alias, rel, "alias")
+				add(alias, rel)
 			}
 		}
 	}
@@ -90,7 +83,7 @@ func extractYAMLBlockList(fm, key string) []string {
 		item := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
 		item = strings.Trim(item, `"'`)
 		if item != "" {
-		 out = append(out, item)
+			out = append(out, item)
 		}
 	}
 	return out
