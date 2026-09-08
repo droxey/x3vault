@@ -33,6 +33,9 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	if backedUp {
+		fmt.Fprintf(os.Stderr, "backed up previous build to %s\n", filepath.Join(cfg.BuildRoot, buildBackupDir))
+	}
 	promoted := false
 	if backedUp {
 		defer func() {
