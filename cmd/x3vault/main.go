@@ -126,8 +126,9 @@ func runInit(args []string) {
 		fatal(err)
 	}
 	cfgPath := config.ConfigPath(abs)
-	if _, err := os.Stat(cfgPath); err == nil {
-		fmt.Fprintf(os.Stderr, "config already exists: %s\n", cfgPath)
+	existing := config.ResolveConfigPath(abs)
+	if _, err := os.Stat(existing); err == nil {
+		fmt.Fprintf(os.Stderr, "config already exists: %s\n", existing)
 		os.Exit(0)
 	}
 
@@ -142,6 +143,7 @@ func runInit(args []string) {
 		fatal(err)
 	}
 	fmt.Fprintf(os.Stderr, "wrote %s\n", cfgPath)
+	fmt.Fprintf(os.Stderr, "build output (default): %s/current/\n", filepath.Join(filepath.Dir(abs), config.EreaderDirName, "build"))
 	fmt.Fprintf(os.Stderr, "source: %s\n", sourceDir)
 	fmt.Fprintf(os.Stderr, "excluded vault paths: %s\n", strings.Join(def.Sync.ExcludeVaultPaths, ", "))
 	for _, d := range config.MissingStandardDirs(sourceDir, def.Wiki.StandardDirs) {
