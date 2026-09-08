@@ -29,8 +29,18 @@ const buildCurrentDir = "current"
 const buildBackupDir = "backup"
 
 func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
-	if err := backupCurrentBuild(cfg.BuildRoot); err != nil {
+	backedUp, err := backupCurrentBuild(cfg.BuildRoot)
+	if err != nil {
 		return nil, err
+	}
+	promoted := false
+	if backedUp {
+		defer func() {
+			if !promoted {
+				_ = os.RemoveAll(filepath.Join(cfg.BuildRoot, "staging"))
+				_ = restoreBackupBuild(cfg.BuildRoot)
+			}
+		}()
 	}
 
 	staging := filepath.Join(cfg.BuildRoot, "staging")
@@ -137,25 +147,48 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 	if err := os.Rename(staging, current); err != nil {
 		return res, fmt.Errorf("promote staging: %w", err)
 	}
+	promoted = true
 	res.StagingDir = current
 	return res, nil
 }
 
 // backupCurrentBuild moves build/current to build/backup before a new build.
-func backupCurrentBuild(buildRoot string) error {
+// Returns true when an existing current build was moved to backup.
+func backupCurrentBuild(buildRoot string) (bool, error) {
 	current := filepath.Join(buildRoot, buildCurrentDir)
 	if _, err := os.Stat(current); err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("stat current build: %w", err)
+		return false, fmt.Errorf("stat current build: %w", err)
 	}
 	backup := filepath.Join(buildRoot, buildBackupDir)
 	if err := os.RemoveAll(backup); err != nil {
-		return fmt.Errorf("remove old backup: %w", err)
+		return false, fmt.Errorf("remove old backup: %w", err)
 	}
 	if err := os.Rename(current, backup); err != nil {
-		return fmt.Errorf("backup current build: %w", err)
+		return false, fmt.Errorf("backup current build: %w", err)
+	}
+	return true, nil
+}
+
+// restoreBackupBuild moves build/backup back to build/current after a failed build.
+func restoreBackupBuild(buildRoot string) error {
+	current := filepath.Join(buildRoot, buildCurrentDir)
+	if _, err := os.Stat(current); err == nil {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("stat current build: %w", err)
+	}
+	backup := filepath.Join(buildRoot, buildBackupDir)
+	if _, err := os.Stat(backup); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat backup build: %w", err)
+	}
+	if err := os.Rename(backup, current); err != nil {
+		return fmt.Errorf("restore backup build: %w", err)
 	}
 	return nil
 }

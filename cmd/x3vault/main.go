@@ -70,7 +70,6 @@ Usage:
   x3vault config dirs unignore DIR... [--vault PATH]
   x3vault config dirs allow DIR... [--vault PATH]   # switches to whitelist mode
   x3vault config dirs unallow DIR... [--vault PATH]
-  x3vault config dirs ignore DIR... [--vault PATH]
   --vault PATH   Vault root (default: current directory or config)
   --dry-run      Print plan without mutating the device
   --json         Machine-readable output on stdout
@@ -465,6 +464,7 @@ func runDoctor(args []string) {
 	fmt.Fprintf(os.Stderr, "notes:   %d\n", len(disc.Notes))
 	fmt.Fprintf(os.Stderr, "dirs:    allowed=%d ignored=%d\n", len(cfg.Wiki.Allowed), len(cfg.Wiki.Ignored))
 	fmt.Fprintf(os.Stderr, "build:   %s\n", cfg.BuildRoot)
+	printBuildDirStatus(cfg.BuildRoot)
 	fmt.Fprintf(os.Stderr, "device:  %s  root=%s  timeout=%s\n", cfg.Device.BaseURL, cfg.DeviceRoot(), cfg.DeviceTimeout())
 	fmt.Fprintf(os.Stderr, "sync:    fail_fast=%v hash_manifest=%v clean_empty_dirs=%v\n",
 		cfg.Sync.FailFast, cfg.Sync.HashManifest, cfg.Sync.CleanEmptyDirs)
@@ -492,6 +492,21 @@ func syncTransport(cfg *config.Config) *sync.Transport {
 
 func syncOpts(cfg *config.Config) sync.Options {
 	return sync.OptionsFromConfig(cfg)
+}
+
+func printBuildDirStatus(buildRoot string) {
+	current := filepath.Join(buildRoot, "current")
+	backup := filepath.Join(buildRoot, "backup")
+	if st, err := os.Stat(current); err == nil && st.IsDir() {
+		fmt.Fprintf(os.Stderr, "current: %s\n", current)
+	} else {
+		fmt.Fprintf(os.Stderr, "current: (none)\n")
+	}
+	if st, err := os.Stat(backup); err == nil && st.IsDir() {
+		fmt.Fprintf(os.Stderr, "backup:  %s\n", backup)
+	} else {
+		fmt.Fprintf(os.Stderr, "backup:  (none)\n")
+	}
 }
 
 func loadConfig(vaultFlag string) (*config.Config, error) {
