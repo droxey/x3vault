@@ -52,7 +52,7 @@ func Run(cfg *config.Config, disc *vault.Discovery, opts RunOptions) (res *Resul
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	noteReader, err := markdown.OpenNoteReader(filepath.Join(cfg.VaultRoot, cfg.SourceRoot))
+	noteReader, err := markdown.OpenNoteReader(disc.SourceRoot)
 	if err != nil {
 		return nil, fmt.Errorf("open source notes: %w", err)
 	}
@@ -132,7 +132,7 @@ func Run(cfg *config.Config, disc *vault.Discovery, opts RunOptions) (res *Resul
 			noteRefs = append(noteRefs, markdown.NoteRef{RelPath: n.RelPath, AbsPath: n.AbsPath})
 		}
 	}
-	indexResult := markdown.BuildNoteIndex(noteRefs, noteReader)
+	indexResult := markdown.BuildNoteIndex(ctx, noteRefs, noteReader)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

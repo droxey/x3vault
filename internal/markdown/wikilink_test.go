@@ -1,6 +1,7 @@
 package markdown
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -45,7 +46,7 @@ func TestNormalizeWikilinkHeadingAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	idx := BuildNoteIndex([]NoteRef{
+	idx := BuildNoteIndex(context.Background(), []NoteRef{
 		{RelPath: "entities/page.md", AbsPath: notePath},
 		{RelPath: "concepts/target.md", AbsPath: targetPath},
 	}, fixtureNoteReader(t, wiki))

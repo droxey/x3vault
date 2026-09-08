@@ -32,7 +32,7 @@ func noteFixture(t *testing.T, files map[string]string) (string, NormalizeOpts) 
 			refs = append(refs, NoteRef{RelPath: rel, AbsPath: p})
 		}
 	}
-	return source, NormalizeOpts{VaultRoot: root, SourceRoot: source, SourceRel: "wiki", AssetsRoot: "assets", AssetOutDir: filepath.Join(t.TempDir(), "assets"), NoteIndex: BuildNoteIndex(refs, fixtureNoteReader(t, source)).Index}
+	return source, NormalizeOpts{VaultRoot: root, SourceRoot: source, SourceRel: "wiki", AssetsRoot: "assets", AssetOutDir: filepath.Join(t.TempDir(), "assets"), NoteIndex: BuildNoteIndex(context.Background(), refs, fixtureNoteReader(t, source)).Index}
 }
 
 func normalizeFixture(t *testing.T, source, rel, body string, opts NormalizeOpts) *NormalizedNote {

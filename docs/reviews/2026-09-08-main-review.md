@@ -137,3 +137,14 @@ Maintenance sources: [archived YAML upstream](https://github.com/go-yaml/yaml),
 [successor maintenance policy](https://github.com/yaml/go-yaml#version-intentions),
 [maintained YAML v3](https://pkg.go.dev/go.yaml.in/yaml/v3), and
 [GitHub Actions Node 20 migration notice](https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/).
+
+### R42 Integration Details — Reported Before Corrections
+
+On resuming draft PR #13, a failing regression confirmed that its new note
+reader rejected vault-root aliases: discovery returns canonical note paths,
+while the reader retained the lexical config path. Open the validated discovery
+source to retain alias compatibility. Indexing also replaced the build context
+with `context.Background()`; pass cancellation through the shared reader.
+The draft source-replacement test's implicit-label expectation was incorrect;
+an explicit fixture label tests original metadata resolution without altering
+normalization behavior.

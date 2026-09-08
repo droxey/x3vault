@@ -2,6 +2,7 @@ package markdown
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,7 +84,7 @@ func TestIndexRejectsSymlinkedMetadata(t *testing.T) {
 	if err := os.Symlink(outside, note); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	index := BuildNoteIndex([]NoteRef{{RelPath: "note.md", AbsPath: note}}, fixtureNoteReader(t, source))
+	index := BuildNoteIndex(context.Background(), []NoteRef{{RelPath: "note.md", AbsPath: note}}, fixtureNoteReader(t, source))
 	if index.Index["Foreign Title"] != "" || index.Index["Foreign Alias"] != "" {
 		t.Fatalf("foreign metadata was indexed: %v", index.Index)
 	}
@@ -98,5 +99,37 @@ func TestNormalizeRequiresMatchingSourceReference(t *testing.T) {
 	opts.NoteReader = fixtureNoteReader(t, source)
 	if _, err := Normalize(outside, "note.md", opts); err == nil {
 		t.Fatal("mismatched absolute source reference was accepted")
+	}
+}
+
+func TestOpenNoteReaderRequiresDirectoryWithoutSymlink(t *testing.T) {
+	for _, kind := range []string{"regular file", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			source := filepath.Join(t.TempDir(), "source")
+			if kind == "regular file" {
+				if err := os.WriteFile(source, []byte("not a directory"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Symlink(t.TempDir(), source); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			reader, err := OpenNoteReader(source)
+			if reader != nil {
+				reader.Close()
+			}
+			if err == nil {
+				t.Fatal("non-directory source root was accepted")
+			}
+		})
+	}
+}
+
+func TestNoteReaderCanceledBeforeRead(t *testing.T) {
+	source, _ := noteFixture(t, map[string]string{"note.md": "original"})
+	reader := fixtureNoteReader(t, source)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := reader.Read(ctx, "note.md"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Read error = %v, want context.Canceled", err)
 	}
 }

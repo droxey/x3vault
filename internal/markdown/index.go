@@ -14,7 +14,11 @@ type IndexResult struct{ Index map[string]string }
 
 // BuildNoteIndex indexes names and metadata, then canonical note paths.
 // Last-wins shorthand resolution is retained; aliases cannot shadow a real path.
-func BuildNoteIndex(notes []NoteRef, reader *NoteReader) IndexResult {
+// Cancellation stops indexing; callers must check ctx before using the result.
+func BuildNoteIndex(ctx context.Context, notes []NoteRef, reader *NoteReader) IndexResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	res := IndexResult{Index: make(map[string]string)}
 	add := func(key, rel string) {
 		if key = normalizeIndexKey(key); key != "" {
@@ -22,9 +26,12 @@ func BuildNoteIndex(notes []NoteRef, reader *NoteReader) IndexResult {
 		}
 	}
 	for _, n := range notes {
+		if ctx.Err() != nil {
+			return res
+		}
 		rel := filepath.ToSlash(n.RelPath)
 		add(trimMarkdownExt(filepath.Base(rel)), rel)
-		raw, err := reader.readReference(context.Background(), n.AbsPath, n.RelPath)
+		raw, err := reader.readReference(ctx, n.AbsPath, n.RelPath)
 		if err != nil {
 			continue
 		} // Normalize reports unreadable and malformed notes.
@@ -38,6 +45,9 @@ func BuildNoteIndex(notes []NoteRef, reader *NoteReader) IndexResult {
 		}
 	}
 	for _, n := range notes {
+		if ctx.Err() != nil {
+			return res
+		}
 		rel := filepath.ToSlash(n.RelPath)
 		add(rel, rel)
 	}

@@ -518,7 +518,7 @@ func TestRunRejectsNoteReplacedWithOutsideSymlink(t *testing.T) {
 
 func TestRunReadsOriginalSourceWhenRootIsReplaced(t *testing.T) {
 	cfg, disc := buildFixture(t)
-	writeBuildFixture(t, disc.Notes[0].AbsPath, "---\ntitle: Original title\n---\n# Original note\n[[Original title]]\n")
+	writeBuildFixture(t, disc.Notes[0].AbsPath, "---\ntitle: Original title\n---\n# Original note\n[[Original title|Original title]]\n")
 	outside := t.TempDir()
 	writeBuildFixture(t, filepath.Join(outside, "index.md"), "---\ntitle: Outside title\n---\nSYNTHETIC OUTSIDE NOTE\n")
 	changed := false
@@ -547,4 +547,23 @@ func TestRunReadsOriginalSourceWhenRootIsReplaced(t *testing.T) {
 	if !strings.Contains(string(body), "[Original title](index.md)") {
 		t.Fatalf("note index did not use the original source metadata: %s", body)
 	}
+}
+
+func TestRunReadsNotesThroughVaultAlias(t *testing.T) {
+	cfg, _ := buildFixture(t)
+	alias := filepath.Join(filepath.Dir(cfg.VaultRoot), "vault-alias")
+	if err := os.Symlink(cfg.VaultRoot, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	cfg.VaultRoot = alias
+	writeBuildFixture(t, filepath.Join(alias, cfg.SourceRoot, "index.md"), "---\ntitle: Vault alias title\n---\n[[Vault alias title|Alias link]]\n")
+	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot, cfg.Wiki)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(cfg, disc, RunOptions{})
+	if err != nil {
+		t.Fatalf("build through vault alias: %v; result: %+v", err, res)
+	}
+	requireBuildFile(t, filepath.Join(res.StagingDir, cfg.SourceRoot, "index.md"), "# Vault alias title\n\n[Alias link](index.md)\n")
 }

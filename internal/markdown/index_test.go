@@ -1,6 +1,7 @@
 package markdown
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,7 +20,7 @@ func TestBuildNoteIndexAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res := BuildNoteIndex([]NoteRef{{
+	res := BuildNoteIndex(context.Background(), []NoteRef{{
 		RelPath: "entities/memex.md",
 		AbsPath: notePath,
 	}}, fixtureNoteReader(t, dir))
@@ -44,12 +45,22 @@ func TestBuildNoteIndexDuplicateBasenamePicksLast(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	res := BuildNoteIndex([]NoteRef{
+	res := BuildNoteIndex(context.Background(), []NoteRef{
 		{RelPath: "entities/foo.md", AbsPath: a},
 		{RelPath: "concepts/foo.md", AbsPath: b},
 	}, fixtureNoteReader(t, dir))
 	if got := res.Index["foo"]; got != "concepts/foo.md" {
 		t.Fatalf("expected last-wins basename, got %q", got)
+	}
+}
+
+func TestBuildNoteIndexCanceled(t *testing.T) {
+	source, _ := noteFixture(t, map[string]string{"note.md": "---\ntitle: Note title\n---\ncontent"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := BuildNoteIndex(ctx, []NoteRef{{RelPath: "note.md", AbsPath: filepath.Join(source, "note.md")}}, fixtureNoteReader(t, source))
+	if len(result.Index) != 0 {
+		t.Fatalf("canceled indexing read notes: %v", result.Index)
 	}
 }
 
