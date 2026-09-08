@@ -12,7 +12,7 @@ import (
 
 // Obsidian-style patterns
 var (
-	reWikilink    = regexp.MustCompile(`\[\[([^\]|#]+)(?:\|([^\]]+))?(?:#([^\]]+))?\]\]`)
+	reWikilink    = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 	reEmbed       = regexp.MustCompile(`!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]`)
 	reComment     = regexp.MustCompile(`%%[\s\S]*?%%`)
 	reFrontmatter = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n?`)
@@ -112,15 +112,10 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 
 	text = reWikilink.ReplaceAllStringFunc(text, func(match string) string {
 		sub := reWikilink.FindStringSubmatch(match)
-		target := strings.TrimSpace(sub[1])
-		label := ""
-		heading := ""
-		if len(sub) > 2 && sub[2] != "" {
-			label = strings.TrimSpace(sub[2])
+		if len(sub) < 2 {
+			return match
 		}
-		if len(sub) > 3 && sub[3] != "" {
-			heading = strings.TrimSpace(sub[3])
-		}
+		target, heading, label := parseWikilink(sub[1])
 
 		resolved, ok := resolveNote(target, opts.NoteIndex)
 		if !ok {

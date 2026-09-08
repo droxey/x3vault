@@ -205,7 +205,84 @@ func BuildPlan(t *Transport, root, localCurrent string) (*Plan, error) {
 			Type: "file",
 		})
 	}
+	appendEmptyDirDeletes(plan, localHashes, remoteFiles, deleteRels, remoteDirs, root)
 	return plan, nil
+}
+
+func appendEmptyDirDeletes(plan *Plan, localHashes map[string]string, remoteFiles map[string]int64, fileDeletes []string, remoteDirs map[string]bool, root string) {
+	deleteFiles := map[string]bool{}
+	for _, rel := range fileDeletes {
+		deleteFiles[rel] = true
+	}
+	remaining := map[string]int64{}
+	for rel, size := range remoteFiles {
+		if !deleteFiles[rel] {
+			remaining[rel] = size
+		}
+	}
+
+	plannedDirs := map[string]bool{}
+	for {
+		added := false
+		var candidates []string
+		for dir := range remoteDirs {
+			if dir == "" || strings.HasPrefix(dir, "_meta") || plannedDirs[dir] {
+				continue
+			}
+			if mapKeyHasPrefix(localHashes, dir) || hasPathPrefix(remaining, dir) {
+				continue
+			}
+			if hasUndeletedSubdir(dir, remoteDirs, plannedDirs) {
+				continue
+			}
+			candidates = append(candidates, dir)
+		}
+		sort.Slice(candidates, func(i, j int) bool {
+			return strings.Count(candidates[i], "/") > strings.Count(candidates[j], "/")
+		})
+		for _, dir := range candidates {
+			plannedDirs[dir] = true
+			plan.Deletes = append(plan.Deletes, PlanOp{
+				Op:   "delete",
+				Path: path.Join(root, dir),
+				Type: "directory",
+			})
+			added = true
+		}
+		if !added {
+			break
+		}
+	}
+}
+
+func hasPathPrefix(files map[string]int64, dir string) bool {
+	prefix := dir + "/"
+	for f := range files {
+		if strings.HasPrefix(f, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func mapKeyHasPrefix(files map[string]string, dir string) bool {
+	prefix := dir + "/"
+	for f := range files {
+		if strings.HasPrefix(f, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUndeletedSubdir(dir string, dirs, deleting map[string]bool) bool {
+	prefix := dir + "/"
+	for d := range dirs {
+		if d != dir && strings.HasPrefix(d, prefix) && !deleting[d] {
+			return true
+		}
+	}
+	return false
 }
 
 func needsUpload(t *Transport, root, rel, localHash, localCurrent string, remoteFiles map[string]int64, remoteManifest *HashManifest) bool {
@@ -254,8 +331,7 @@ func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool) *Sync
 			parent = "/"
 		}
 		if err := t.Mkdir(parent, name); err != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("mkdir %s: %v", d, err))
-			return res
+			return res.fail(fmt.Sprintf("mkdir %s: %v", d, err))
 		}
 	}
 	for _, op := range plan.Uploads {
@@ -268,37 +344,61 @@ func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool) *Sync
 		}
 		data, err := os.ReadFile(localPath)
 		if err != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("read %s: %v", localPath, err))
-			return res
+			return res.fail(fmt.Sprintf("read %s: %v", localPath, err))
 		}
 		dir := path.Dir(op.Path)
 		name := path.Base(op.Path)
 		if err := t.Upload(dir, name, data); err != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("upload %s: %v", op.Path, err))
-			return res
+			return res.fail(fmt.Sprintf("upload %s: %v", op.Path, err))
 		}
 		res.Uploaded++
 		fmt.Fprintf(os.Stderr, "  uploaded %s\n", op.Path)
 	}
+	var fileDeletes, dirDeletes []PlanOp
 	for _, op := range plan.Deletes {
+		if op.Type == "directory" {
+			dirDeletes = append(dirDeletes, op)
+		} else {
+			fileDeletes = append(fileDeletes, op)
+		}
+	}
+	for _, op := range fileDeletes {
 		if dryRun {
 			fmt.Fprintf(os.Stderr, "  delete %s\n", op.Path)
 			res.Deleted++
 			continue
 		}
 		if err := t.Delete(op.Path, op.Type); err != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("delete %s: %v", op.Path, err))
-			return res
+			return res.fail(fmt.Sprintf("delete %s: %v", op.Path, err))
 		}
 		res.Deleted++
 		fmt.Fprintf(os.Stderr, "  deleted %s\n", op.Path)
 	}
+	sort.Slice(dirDeletes, func(i, j int) bool {
+		return strings.Count(dirDeletes[i].Path, "/") > strings.Count(dirDeletes[j].Path, "/")
+	})
+	for _, op := range dirDeletes {
+		if dryRun {
+			fmt.Fprintf(os.Stderr, "  rmdir %s\n", op.Path)
+			res.Deleted++
+			continue
+		}
+		if err := t.Delete(op.Path, op.Type); err != nil {
+			return res.fail(fmt.Sprintf("rmdir %s: %v", op.Path, err))
+		}
+		res.Deleted++
+		fmt.Fprintf(os.Stderr, "  rmdir %s\n", op.Path)
+	}
 	if !dryRun && len(res.Errors) == 0 {
 		if err := writeHashManifest(t, root, localCurrent); err != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("update hash manifest: %v", err))
-			return res
+			return res.fail(fmt.Sprintf("update hash manifest: %v", err))
 		}
 	}
+	return res
+}
+
+func (res *SyncResult) fail(msg string) *SyncResult {
+	res.Errors = append(res.Errors, msg)
 	return res
 }
 

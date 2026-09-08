@@ -367,7 +367,16 @@ func runSync(args []string) {
 		os.Exit(5)
 	}
 
-	fmt.Fprintf(os.Stderr, "plan: %d uploads, %d deletes\n", len(plan.Uploads), len(plan.Deletes))
+	fileDeletes, dirDeletes := 0, 0
+	for _, op := range plan.Deletes {
+		if op.Type == "directory" {
+			dirDeletes++
+		} else {
+			fileDeletes++
+		}
+	}
+	fmt.Fprintf(os.Stderr, "plan: %d uploads, %d file deletes, %d dir deletes\n",
+		len(plan.Uploads), fileDeletes, dirDeletes)
 	if dry {
 		fmt.Fprintln(os.Stderr, "dry-run:")
 	}
@@ -385,6 +394,7 @@ func runSync(args []string) {
 	}
 
 	if !res.OK {
+		fmt.Fprintln(os.Stderr, "sync failed (fail-fast; device may be partially updated)")
 		emit(res, jsonOut)
 		os.Exit(4)
 	}
