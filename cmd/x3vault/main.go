@@ -69,8 +69,8 @@ Usage:
   x3vault config dirs ignore DIR... [--vault PATH]
   x3vault config dirs unignore DIR... [--vault PATH]
   x3vault config dirs allow DIR... [--vault PATH]   # switches to whitelist mode
-
-Options:
+  x3vault config dirs unallow DIR... [--vault PATH]
+  x3vault config dirs ignore DIR... [--vault PATH]
   --vault PATH   Vault root (default: current directory or config)
   --dry-run      Print plan without mutating the device
   --json         Machine-readable output on stdout
