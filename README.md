@@ -5,9 +5,10 @@ One-way build + exact-mirror sync of an Obsidian wiki/ folder to an XTEINK X3 ru
 ## Status
 
 - [x] Config + discovery
-- [x] Markdown normalize + assets
+- [x] Markdown normalize + assets (Obsidian attachment folder)
+- [x] Alias-aware wikilink index
 - [x] Deterministic build staging
-- [x] Witch HTTP transport + ownership + exact mirror
+- [x] Witch HTTP transport + ownership + exact mirror + content-hash sync
 - [x] CLI: device init / sync / dry-run
 
 ## Quick start
@@ -33,6 +34,13 @@ go build -o bin/x3vault ./cmd/x3vault
 | `device init` | Create `/x3vault` + ownership marker |
 | `sync [--dry-run]` | Exact-mirror local build → device |
 | `doctor` | Paths, note count, device reachability |
+
+## Sync
+
+Sync compares **SHA-256 content hashes**, not file sizes. After a successful sync,
+x3vault writes `/x3vault/_meta/file-hashes.json` on the device so later runs can
+skip unchanged files. When no manifest exists yet, it verifies same-size files via
+download before skipping.
 
 ## Safety
 

@@ -126,28 +126,15 @@ func BuildPlan(t *Transport, root, localCurrent string) (*Plan, error) {
 		return nil, fmt.Errorf("no ownership marker at %s/_meta/ownership.json — run: x3vault device init", root)
 	}
 	plan := &Plan{}
-	localFiles := map[string]int64{}
-	err = filepath.Walk(localCurrent, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(localCurrent, p)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if rel == "build.manifest" {
-			return nil
-		}
-		localFiles[rel] = info.Size()
-		return nil
-	})
+	localHashes, err := HashLocalTree(localCurrent)
+	if err != nil {
+		return nil, fmt.Errorf("hash local build: %w", err)
+	}
+	remoteManifest, err := LoadRemoteHashManifest(t, root)
 	if err != nil {
 		return nil, err
 	}
+
 	remoteFiles := map[string]int64{}
 	remoteDirs := map[string]bool{}
 	var walkRemote func(dir string) error
@@ -180,18 +167,22 @@ func BuildPlan(t *Transport, root, localCurrent string) (*Plan, error) {
 		return nil, fmt.Errorf("walk remote: %w", err)
 	}
 	var uploadRels []string
-	for rel, size := range localFiles {
-		rsize, ok := remoteFiles[rel]
-		if !ok || rsize != size {
+	for rel, localHash := range localHashes {
+		if needsUpload(t, root, rel, localHash, localCurrent, remoteFiles, remoteManifest) {
 			uploadRels = append(uploadRels, rel)
 		}
 	}
 	sort.Strings(uploadRels)
 	for _, rel := range uploadRels {
+		localPath := filepath.Join(localCurrent, filepath.FromSlash(rel))
+		info, err := os.Stat(localPath)
+		if err != nil {
+			return nil, fmt.Errorf("stat %s: %w", localPath, err)
+		}
 		plan.Uploads = append(plan.Uploads, PlanOp{
 			Op:   "upload",
 			Path: path.Join(root, rel),
-			Size: localFiles[rel],
+			Size: info.Size(),
 		})
 		dir := path.Dir(rel)
 		if dir != "." && dir != "/" {
@@ -200,7 +191,7 @@ func BuildPlan(t *Transport, root, localCurrent string) (*Plan, error) {
 	}
 	var deleteRels []string
 	for rel := range remoteFiles {
-		if _, ok := localFiles[rel]; !ok {
+		if _, ok := localHashes[rel]; !ok {
 			deleteRels = append(deleteRels, rel)
 		}
 	}
@@ -215,6 +206,27 @@ func BuildPlan(t *Transport, root, localCurrent string) (*Plan, error) {
 		})
 	}
 	return plan, nil
+}
+
+func needsUpload(t *Transport, root, rel, localHash, localCurrent string, remoteFiles map[string]int64, remoteManifest *HashManifest) bool {
+	if remoteHash, ok := remoteManifest.Files[rel]; ok && remoteHash == localHash {
+		return false
+	}
+	rsize, exists := remoteFiles[rel]
+	if !exists {
+		return true
+	}
+	localPath := filepath.Join(localCurrent, filepath.FromSlash(rel))
+	info, err := os.Stat(localPath)
+	if err != nil || info.Size() != rsize {
+		return true
+	}
+	remoteData, err := t.ReadFile(path.Join(root, rel))
+	if err != nil {
+		return true
+	}
+	sum := sha256.Sum256(remoteData)
+	return hex.EncodeToString(sum[:]) != localHash
 }
 
 func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool) *SyncResult {
@@ -280,7 +292,25 @@ func ApplyPlan(t *Transport, plan *Plan, localCurrent string, dryRun bool) *Sync
 		res.Deleted++
 		fmt.Fprintf(os.Stderr, "  deleted %s\n", op.Path)
 	}
+	if !dryRun && len(res.Errors) == 0 {
+		if err := writeHashManifest(t, root, localCurrent); err != nil {
+			res.Errors = append(res.Errors, fmt.Sprintf("update hash manifest: %v", err))
+		}
+	}
 	return res
+}
+
+func writeHashManifest(t *Transport, root, localCurrent string) error {
+	hashes, err := HashLocalTree(localCurrent)
+	if err != nil {
+		return err
+	}
+	manifest := &HashManifest{Files: hashes}
+	data, err := manifest.Encode()
+	if err != nil {
+		return err
+	}
+	return t.Upload(root+"/_meta", "file-hashes.json", data)
 }
 
 func ContentHash(data []byte) string {
