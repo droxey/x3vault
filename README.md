@@ -36,7 +36,9 @@ For vault at `/path/to/llmwiki-vault/`:
     └── backup/                 ← previous current (kept on next build)
 ```
 
-`build_root` may be set to any path **outside** the Obsidian vault. It must not lie inside the vault or its subfolders (including `wiki/`, `.obsidian/`, etc.).
+Each `build` renames `current/` → `backup/` first, then writes a new `current/`. If the build fails, the previous `current/` is restored from `backup/` automatically.
+
+`build_root` may be set to any path **outside** the Obsidian vault.
 
 ```bash
 go build -o bin/x3vault ./cmd/x3vault

@@ -52,7 +52,6 @@ type Config struct {
 	VaultRoot  string       `yaml:"vault_root"`
 	SourceRoot string       `yaml:"source_root"`
 	BuildRoot  string       `yaml:"build_root"`
-	EPUB       bool         `yaml:"epub"`
 	Wiki       WikiDirs     `yaml:"wiki"`
 	Build      BuildConfig  `yaml:"build"`
 	Sync       SyncConfig   `yaml:"sync"`
@@ -91,7 +90,6 @@ func Default() *Config {
 		VaultRoot:  ".",
 		SourceRoot: "wiki",
 		BuildRoot:  DefaultBuildRootRel,
-		EPUB:       false,
 		Wiki:       DefaultWikiDirs(),
 		Build:      DefaultBuild(),
 		Sync:       DefaultSync(),

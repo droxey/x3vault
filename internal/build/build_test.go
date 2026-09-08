@@ -126,3 +126,43 @@ func TestRunBacksUpPreviousCurrentBuild(t *testing.T) {
 		t.Fatalf("current build missing: %v", err)
 	}
 }
+
+func TestBackupCurrentBuildReturnsBackedUp(t *testing.T) {
+	buildRoot := t.TempDir()
+	ok, err := backupCurrentBuild(buildRoot)
+	if err != nil || ok {
+		t.Fatalf("backupCurrentBuild(empty) = (%v, %v), want (false, nil)", ok, err)
+	}
+
+	current := filepath.Join(buildRoot, buildCurrentDir)
+	if err := os.MkdirAll(current, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ok, err = backupCurrentBuild(buildRoot)
+	if err != nil || !ok {
+		t.Fatalf("backupCurrentBuild(with current) = (%v, %v), want (true, nil)", ok, err)
+	}
+	if _, err := os.Stat(filepath.Join(buildRoot, buildBackupDir)); err != nil {
+		t.Fatalf("backup dir missing: %v", err)
+	}
+}
+
+func TestRestoreBackupBuild(t *testing.T) {
+	buildRoot := t.TempDir()
+	backup := filepath.Join(buildRoot, buildBackupDir)
+	if err := os.MkdirAll(filepath.Join(backup, "wiki"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backup, "build.manifest"), []byte("generation: g-old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreBackupBuild(buildRoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(buildRoot, buildCurrentDir, "build.manifest")); err != nil {
+		t.Fatalf("current not restored: %v", err)
+	}
+	if _, err := os.Stat(backup); !os.IsNotExist(err) {
+		t.Fatalf("backup should be gone after restore, err=%v", err)
+	}
+}
