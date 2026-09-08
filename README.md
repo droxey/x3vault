@@ -14,24 +14,27 @@ Build output is **markdown for on-device reading**: wikilinks become relative li
 - An Obsidian vault with a `wiki/` source tree (LLM Wiki layout)
 - For device sync: XTE on **File Transfer / Wi-Fi** (Witch Reader transfer screen)
 
-**Build from source**
+**Install**
 
 ```bash
 git clone https://github.com/droxey/x3vault.git
 cd x3vault
-go build -o bin/x3vault ./cmd/x3vault
+go install ./cmd/x3vault
 ```
 
-Optional: install on your `PATH`:
+This installs `x3vault` to `$(go env GOPATH)/bin`. Ensure that directory is on your `PATH`.
+
+**Build without installing** (local `bin/` only):
 
 ```bash
-go install ./cmd/x3vault   # installs to $(go env GOPATH)/bin/x3vault
+go build -o bin/x3vault ./cmd/x3vault
+export PATH="$PWD/bin:$PATH"
 ```
 
 **First-time vault setup**
 
 ```bash
-./bin/x3vault init --vault /path/to/llmwiki-vault
+x3vault init --vault /path/to/llmwiki-vault
 ```
 
 Creates `{vault}/.xte/config.yaml` and prints default paths. Requires `{vault}/wiki/` to exist. Does nothing if config already exists (exit 0).
@@ -41,13 +44,13 @@ Creates `{vault}/.xte/config.yaml` and prints default paths. Requires `{vault}/w
 ```bash
 export VAULT=/path/to/llmwiki-vault
 
-./bin/x3vault build --vault "$VAULT"
-./bin/x3vault doctor --vault "$VAULT"          # check vault + device
+x3vault build --vault "$VAULT"
+x3vault doctor --vault "$VAULT"          # check vault + device
 
 # XTE on File Transfer / Wi-Fi:
-./bin/x3vault device init --vault "$VAULT"     # once per device root
-./bin/x3vault sync --dry-run --vault "$VAULT"  # preview plan
-./bin/x3vault sync --vault "$VAULT"            # upload build/current → device
+x3vault device init --vault "$VAULT"     # once per device root
+x3vault sync --dry-run --vault "$VAULT"  # preview plan
+x3vault sync --vault "$VAULT"            # upload build/current → device
 ```
 
 Build copies every discovered wiki note and **every referenced attachment** into `../ereader/build/current/`. Sync mirrors that tree to `/ereader` on the device. The Obsidian vault is never modified.
@@ -65,8 +68,8 @@ Build copies every discovered wiki note and **every referenced attachment** into
 **Help**
 
 ```bash
-./bin/x3vault help
-./bin/x3vault --help
+x3vault help
+x3vault --help
 ```
 
 ### Commands
@@ -182,13 +185,13 @@ go test ./... -count=1
 go test ./internal/build/... -v
 go test ./internal/markdown/... -v
 go test ./internal/config/... -v
-go test ./internal/sync/... -v
+go test ./internal/sync/... -v   # includes mock device init + sync
 ```
 
-**Verify the CLI builds**
+**Verify install**
 
 ```bash
-go build -o bin/x3vault ./cmd/x3vault
+x3vault help
 ```
 
 **CI**
@@ -196,17 +199,23 @@ go build -o bin/x3vault ./cmd/x3vault
 GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
 
 - `go test ./... -count=1`
-- `go build -o bin/x3vault ./cmd/x3vault`
+- `bash scripts/smoke.sh` — `go install` + end-to-end `init` → `build` → `doctor`
 
-**Manual smoke test** (no device required)
+**Smoke test** (no device required)
+
+```bash
+bash scripts/smoke.sh
+```
+
+Or manually:
 
 ```bash
 TMP=$(mktemp -d)
 mkdir -p "$TMP/vault/wiki"
 echo '# Index' > "$TMP/vault/wiki/index.md"
-./bin/x3vault init --vault "$TMP/vault"
-./bin/x3vault build --vault "$TMP/vault"
-./bin/x3vault doctor --vault "$TMP/vault"
+x3vault init --vault "$TMP/vault"
+x3vault build --vault "$TMP/vault"
+x3vault doctor --vault "$TMP/vault"
 ls -R "$(dirname "$TMP")/ereader/build/current"
 ```
 

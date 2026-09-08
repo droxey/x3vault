@@ -187,6 +187,7 @@ func (t *Transport) EnsureDir(root, relDir string) error {
 		}
 		entries, err := t.List(cur)
 		if err != nil {
+			return err
 		}
 		exists := false
 		for _, e := range entries {
