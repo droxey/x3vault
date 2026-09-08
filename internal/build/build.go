@@ -91,12 +91,7 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 			res.Errors = append(res.Errors, err.Error())
 			continue
 		}
-		header := fmt.Sprintf("<!-- x3vault: %s -->\n", n.RelPath)
-		if norm.Title != "" {
-			header += fmt.Sprintf("<!-- title: %s -->\n", norm.Title)
-		}
-		body := header + "\n" + norm.Body
-		if err := os.WriteFile(dest, []byte(body), 0o644); err != nil {
+		if err := os.WriteFile(dest, []byte(norm.Body), 0o644); err != nil {
 			res.Errors = append(res.Errors, err.Error())
 			continue
 		}

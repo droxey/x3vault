@@ -12,6 +12,16 @@ import (
 
 const SchemaVersion = 1
 
+// Tool paths and device defaults (formerly .x3vault / /x3vault).
+const (
+	ConfigFileName       = ".xte.yaml"
+	LegacyConfigFileName = ".x3vault.yaml"
+	ToolDirName          = ".xte"
+	DefaultBuildRootRel  = ".xte/build"
+	DefaultDeviceRoot    = "/xte"
+	DefaultOwnershipTool = "xte"
+)
+
 type BuildConfig struct {
 	AssetsRoot         string `yaml:"assets_root"`
 	AttachmentFolder   string `yaml:"attachment_folder"`
@@ -57,16 +67,16 @@ func DefaultSync() SyncConfig {
 		FailFast:          true,
 		HashManifest:      true,
 		CleanEmptyDirs:    true,
-		ExcludeVaultPaths: []string{"raw", ".obsidian", ".git", ".x3vault"},
+		ExcludeVaultPaths: []string{"raw", ".obsidian", ".git", ToolDirName, ".x3vault"},
 	}
 }
 
 func DefaultDevice() DeviceConfig {
 	return DeviceConfig{
 		BaseURL:        "http://crosspoint.local",
-		Root:           "/x3vault",
+		Root:           DefaultDeviceRoot,
 		TimeoutSeconds: 60,
-		OwnershipTool:  "x3vault",
+		OwnershipTool:  DefaultOwnershipTool,
 	}
 }
 
@@ -75,7 +85,7 @@ func Default() *Config {
 		Schema:     SchemaVersion,
 		VaultRoot:  ".",
 		SourceRoot: "wiki",
-		BuildRoot:  ".x3vault/build",
+		BuildRoot:  DefaultBuildRootRel,
 		EPUB:       false,
 		Wiki:       DefaultWikiDirs(),
 		Build:      DefaultBuild(),
@@ -177,7 +187,7 @@ func validateRelPath(p, field string) error {
 func validateDeviceRoot(root string) error {
 	root = cleanDeviceRoot(root)
 	if root == "" || root == "/" {
-		return fmt.Errorf("device.root must be an absolute device path (e.g. /x3vault)")
+		return fmt.Errorf("device.root must be an absolute device path (e.g. %s)", DefaultDeviceRoot)
 	}
 	if !strings.HasPrefix(root, "/") {
 		return fmt.Errorf("device.root must start with / (got %q)", root)
@@ -235,6 +245,24 @@ func (c *Config) Resolve(configPath string) error {
 		c.BuildRoot = filepath.Join(c.VaultRoot, c.BuildRoot)
 	}
 	return nil
+}
+
+func ConfigPath(vaultRoot string) string {
+	return filepath.Join(vaultRoot, ConfigFileName)
+}
+
+// ResolveConfigPath returns the config file to use, preferring .xte.yaml with
+// a fallback to legacy .x3vault.yaml when present.
+func ResolveConfigPath(vaultRoot string) string {
+	primary := ConfigPath(vaultRoot)
+	if _, err := os.Stat(primary); err == nil {
+		return primary
+	}
+	legacy := filepath.Join(vaultRoot, LegacyConfigFileName)
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy
+	}
+	return primary
 }
 
 func (c *Config) SourceDir() string {

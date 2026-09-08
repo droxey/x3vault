@@ -14,7 +14,7 @@ func TestDefaultConfigValidates(t *testing.T) {
 
 func TestIsExcludedVaultPath(t *testing.T) {
 	cfg := Default()
-	for _, p := range []string{"raw/foo.md", ".obsidian/app.json", ".git/config", ".x3vault/build/x"} {
+	for _, p := range []string{"raw/foo.md", ".obsidian/app.json", ".git/config", ".xte/build/x", ".x3vault/build/x"} {
 		if !cfg.IsExcludedVaultPath(p) {
 			t.Fatalf("expected excluded: %s", p)
 		}

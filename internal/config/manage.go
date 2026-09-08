@@ -63,7 +63,7 @@ func EnsureConfigExists(vaultPath string) (string, *Config, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	cfgPath := filepath.Join(abs, ".x3vault.yaml")
+	cfgPath := ConfigPath(abs)
 	if _, err := os.Stat(cfgPath); err != nil {
 		if !os.IsNotExist(err) {
 			return "", nil, err

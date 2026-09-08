@@ -91,17 +91,14 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 					alt = filepath.Base(target)
 				}
 				href := relPathFromNote(noteDir, asset.DeviceRel, opts.SourceRel)
-				if isImageExt(ext) {
-					return fmt.Sprintf("![%s](%s)", alt, href)
-				}
-				return fmt.Sprintf("[%s](%s)", alt, href)
+				return imageMarkdown(alt, href, ext, out)
 			}
 			out.Warnings = append(out.Warnings, fmt.Sprintf("missing attachment %s: %v", target, err))
 			if alt == "" {
 				alt = target
 			}
 			if isImageExt(ext) {
-				return fmt.Sprintf("![%s](%s)", alt, target)
+				return imageMarkdown(alt, target, ext, out)
 			}
 			return fmt.Sprintf("[%s](%s)", alt, target)
 		}
@@ -148,7 +145,8 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 		return fmt.Sprintf("[%s](%s)", label, href)
 	})
 
-	out.Body = strings.TrimSpace(text) + "\n"
+	text = rewriteInlineRefs(text, noteDir, opts, out)
+	out.Body = FormatForXTEReader(out.Title, out.Tags, text)
 	return out, nil
 }
 
