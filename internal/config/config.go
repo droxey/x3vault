@@ -136,9 +136,6 @@ func (c *Config) Normalize() {
 		c.Device.OwnershipTool = DefaultDevice().OwnershipTool
 	}
 	c.Sync.ExcludeVaultPaths = normalizeDirList(c.Sync.ExcludeVaultPaths)
-	if len(c.Sync.ExcludeVaultPaths) == 0 && c.Sync.FailFast == false && !c.Sync.HashManifest && !c.Sync.CleanEmptyDirs {
-		// zero value sync block in yaml — defaults already applied via Default() merge
-	}
 }
 
 func (c *Config) Validate() error {

@@ -354,6 +354,7 @@ func runDeviceInit(args []string) {
 	t := syncTransport(cfg)
 	st, err := t.Status()
 	if err != nil {
+		printDeviceUnreachable(err)
 		res.AddError(err.Error(), "")
 		emit(res, jsonOut)
 		os.Exit(4)
@@ -392,6 +393,7 @@ func runSync(args []string) {
 	t := syncTransport(cfg)
 	st, err := t.Status()
 	if err != nil {
+		printDeviceUnreachable(err)
 		res.AddError(err.Error(), "")
 		emit(res, jsonOut)
 		os.Exit(4)
@@ -472,7 +474,7 @@ func runDoctor(args []string) {
 
 	t := syncTransport(cfg)
 	if st, err := t.Status(); err != nil {
-		fmt.Fprintf(os.Stderr, "device:  unreachable (%s)\n", strings.TrimSpace(err.Error()))
+		printDeviceUnreachable(err)
 	} else {
 		fmt.Fprintf(os.Stderr, "device:  online %s/%s heap=%d\n", st.Device, st.Version, st.FreeHeap)
 		owned, _ := sync.HasOwnership(t, cfg.DeviceRoot())
@@ -492,6 +494,11 @@ func syncTransport(cfg *config.Config) *sync.Transport {
 
 func syncOpts(cfg *config.Config) sync.Options {
 	return sync.OptionsFromConfig(cfg)
+}
+
+func printDeviceUnreachable(err error) {
+	fmt.Fprintf(os.Stderr, "device:  unreachable (%s)\n", strings.TrimSpace(err.Error()))
+	fmt.Fprintln(os.Stderr, "hint: on File Transfer / Wi-Fi, set device.base_url to http://<device-ip> in .xte/config.yaml if crosspoint.local does not resolve")
 }
 
 func printBuildDirStatus(buildRoot string) {

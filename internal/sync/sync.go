@@ -146,7 +146,7 @@ func BuildPlan(t *Transport, root, localCurrent string, opts Options) (*Plan, er
 		return nil, err
 	}
 	if !owned {
-		return nil, fmt.Errorf("no ownership marker at %s/_meta/ownership.json — run: x3vault device init", root)
+		return nil, fmt.Errorf("no ownership marker at %s/%s — run: x3vault device init", root, OwnershipMarker)
 	}
 	plan := &Plan{}
 	localHashes, err := HashLocalTree(localCurrent)
@@ -461,9 +461,4 @@ func writeHashManifest(t *Transport, root, localCurrent string) error {
 		return err
 	}
 	return t.Upload(root+"/_meta", "file-hashes.json", data)
-}
-
-func ContentHash(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:8])
 }
