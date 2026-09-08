@@ -29,11 +29,11 @@ For vault at `/path/to/llmwiki-vault/`:
 ├── llmwiki-vault/              ← Obsidian vault (read-only to x3vault)
 │   ├── .xte/config.yaml        ← program config (only vault write)
 │   └── wiki/
-└── ereader/build/current/      ← build output (default build_root)
-    ├── wiki/                   ← normalized notes
-    │   └── entities/note.md
-    └── assets/                 ← all referenced attachments copied here
-        └── ab12/paper.pdf
+└── ereader/build/              ← build output (default build_root)
+    ├── current/                ← latest build (sync reads this)
+    │   ├── wiki/
+    │   └── assets/
+    └── backup/                 ← previous current (kept on next build)
 ```
 
 `build_root` may be set to any path **outside** the Obsidian vault. It must not lie inside the vault or its subfolders (including `wiki/`, `.obsidian/`, etc.).

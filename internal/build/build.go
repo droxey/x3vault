@@ -25,7 +25,14 @@ type Result struct {
 	StagingDir string
 }
 
+const buildCurrentDir = "current"
+const buildBackupDir = "backup"
+
 func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
+	if err := backupCurrentBuild(cfg.BuildRoot); err != nil {
+		return nil, err
+	}
+
 	staging := filepath.Join(cfg.BuildRoot, "staging")
 	wikiOut := filepath.Join(staging, cfg.SourceRoot)
 	assetOut := filepath.Join(staging, cfg.Build.AssetsRoot)
@@ -126,13 +133,31 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 	}
 	_ = os.WriteFile(manifestPath, []byte(manifest), 0o644)
 
-	current := filepath.Join(cfg.BuildRoot, "current")
-	_ = os.RemoveAll(current)
+	current := filepath.Join(cfg.BuildRoot, buildCurrentDir)
 	if err := os.Rename(staging, current); err != nil {
 		return res, fmt.Errorf("promote staging: %w", err)
 	}
 	res.StagingDir = current
 	return res, nil
+}
+
+// backupCurrentBuild moves build/current to build/backup before a new build.
+func backupCurrentBuild(buildRoot string) error {
+	current := filepath.Join(buildRoot, buildCurrentDir)
+	if _, err := os.Stat(current); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat current build: %w", err)
+	}
+	backup := filepath.Join(buildRoot, buildBackupDir)
+	if err := os.RemoveAll(backup); err != nil {
+		return fmt.Errorf("remove old backup: %w", err)
+	}
+	if err := os.Rename(current, backup); err != nil {
+		return fmt.Errorf("backup current build: %w", err)
+	}
+	return nil
 }
 
 // pruneIgnoredOutput removes any files or directories under ignored_dirs from build output.

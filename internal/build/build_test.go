@@ -71,3 +71,58 @@ func TestRunCopiesReferencedAttachmentsToBuildAssets(t *testing.T) {
 		t.Fatalf("copied files = %v, want diagram.png and paper.pdf under %s", copied, assetsDir)
 	}
 }
+
+func TestRunBacksUpPreviousCurrentBuild(t *testing.T) {
+	buildRoot := t.TempDir()
+	current := filepath.Join(buildRoot, buildCurrentDir)
+	backup := filepath.Join(buildRoot, buildBackupDir)
+	if err := os.MkdirAll(filepath.Join(current, "wiki"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(current, "build.manifest"), []byte("generation: g-old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(backup, "wiki"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backup, "build.manifest"), []byte("generation: g-older\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	vaultDir := t.TempDir()
+	wiki := filepath.Join(vaultDir, "wiki")
+	if err := os.MkdirAll(wiki, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wiki, "index.md"), []byte("# Index\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.VaultRoot = vaultDir
+	cfg.BuildRoot = buildRoot
+	if err := cfg.Resolve(config.ConfigPath(vaultDir)); err != nil {
+		t.Fatal(err)
+	}
+	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot, cfg.Wiki)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(cfg, disc); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(backup, "build.manifest"))
+	if err != nil {
+		t.Fatalf("backup manifest missing: %v", err)
+	}
+	if string(data) != "generation: g-old\n" {
+		t.Fatalf("backup manifest = %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(backup, "wiki")); err != nil {
+		t.Fatalf("backup wiki dir missing: %v", err)
+	}
+	if _, err := os.Stat(current); err != nil {
+		t.Fatalf("current build missing: %v", err)
+	}
+}
