@@ -15,6 +15,20 @@ func TestFormatForXTEReaderTitleAndTags(t *testing.T) {
 	}
 }
 
+func TestFormatForXTEReaderSkipsDuplicateTitleCaseInsensitive(t *testing.T) {
+	out := FormatForXTEReader("index", nil, "# Index\n\nBody.")
+	if out != "# Index\n\nBody.\n" {
+		t.Fatalf("body = %q", out)
+	}
+}
+
+func TestFormatForXTEReaderSkipsDuplicateTitleExact(t *testing.T) {
+	out := FormatForXTEReader("Memex", nil, "# Memex\n\nBody.")
+	if out != "# Memex\n\nBody.\n" {
+		t.Fatalf("body = %q", out)
+	}
+}
+
 func TestFormatForXTEReaderStripsObsidianSyntax(t *testing.T) {
 	in := "Hello ==highlight== text ^block-id\n<!-- secret -->"
 	out := FormatForXTEReader("", nil, in)

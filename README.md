@@ -67,6 +67,32 @@ wiki/
 
 **Never synced by default:** paths in `sync.exclude_vault_paths` (`raw`, `.obsidian`, `.git`, `.xte`), plus ignored wiki dirs (`script/`, `references/`).
 
+## Attachments
+
+Embeds like `![[diagram.png]]` and `![[paper.pdf]]` are copied into `assets/` during build. x3vault must know where attachment files live in your vault.
+
+**Option A — Obsidian config (recommended):** set `attachmentFolderPath` in `.obsidian/app.json` (Obsidian’s default). With `build.read_obsidian_config: true` (the default), x3vault reads this automatically:
+
+```json
+{
+  "attachmentFolderPath": "attachments"
+}
+```
+
+**Option B — x3vault config:** set an explicit folder relative to the vault root:
+
+```yaml
+build:
+  attachment_folder: attachments
+  read_obsidian_config: false   # optional: ignore Obsidian settings
+```
+
+**Path-style embeds** (`![[attachments/diagram.png]]`) resolve relative to the vault without extra config.
+
+**Not searched:** paths under `sync.exclude_vault_paths` (including `raw/`). Put attachments in your configured attachment folder or beside notes, not in excluded dirs.
+
+If attachment resolution fails, `build` prints warnings and leaves broken links in output — run `x3vault build` and check stderr.
+
 ```bash
 ./bin/x3vault config show                            # full config YAML
 ./bin/x3vault config restore                         # reset defaults (keeps vault_root)

@@ -66,7 +66,29 @@ func prependTitleHeading(title, body string) string {
 	if firstLine == h1 {
 		return trimmed
 	}
+	if heading, ok := parseATXHeading(firstLine); ok && strings.EqualFold(heading, title) {
+		return trimmed
+	}
 	return h1 + "\n\n" + trimmed
+}
+
+func parseATXHeading(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "#") {
+		return "", false
+	}
+	i := 0
+	for i < len(line) && line[i] == '#' {
+		i++
+	}
+	if i == 0 || i >= len(line) || line[i] != ' ' {
+		return "", false
+	}
+	text := strings.TrimSpace(line[i+1:])
+	if text == "" {
+		return "", false
+	}
+	return text, true
 }
 
 func collapseBlankLines(s string) string {
