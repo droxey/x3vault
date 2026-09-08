@@ -64,10 +64,9 @@ Usage:
   x3vault status [--vault PATH]
   x3vault config dirs [--vault PATH]
   x3vault config dirs restore [--vault PATH]
-  x3vault config dirs allow DIR... [--vault PATH]
-  x3vault config dirs unallow DIR... [--vault PATH]
   x3vault config dirs ignore DIR... [--vault PATH]
   x3vault config dirs unignore DIR... [--vault PATH]
+  x3vault config dirs allow DIR... [--vault PATH]   # switches to whitelist mode
 
 Options:
   --vault PATH   Vault root (default: current directory or config)
@@ -140,7 +139,10 @@ func runInit(args []string) {
 		fatal(err)
 	}
 	fmt.Fprintf(os.Stderr, "wrote %s\n", cfgPath)
-	fmt.Fprintf(os.Stderr, "source: %s\n", wiki)
+	fmt.Fprintf(os.Stderr, "source: %s (raw/ is never synced)\n", wiki)
+	for _, d := range config.MissingStandardDirs(wiki) {
+		fmt.Fprintf(os.Stderr, "warning: wiki/%s/ not found (standard LLM Wiki folder)\n", d)
+	}
 	fmt.Fprint(os.Stderr, config.FormatWikiDirsSummary(config.DefaultWikiDirs()))
 }
 
@@ -208,7 +210,7 @@ func runConfigDirs(args []string) {
 		if err != nil {
 			fatal(err)
 		}
-		fmt.Fprintf(os.Stderr, "added allowed dirs: %s\n", strings.Join(dirArgs, ", "))
+		fmt.Fprintf(os.Stderr, "switched to whitelist mode; added allowed dirs: %s\n", strings.Join(dirArgs, ", "))
 	case "unallow":
 		if len(dirArgs) == 0 {
 			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs unallow DIR...")

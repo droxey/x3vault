@@ -161,6 +161,20 @@ func (t *Transport) Delete(itemPath, itemType string) error {
 	return nil
 }
 
+func (t *Transport) ReadFile(itemPath string) ([]byte, error) {
+	u := t.BaseURL + "/download?path=" + url.QueryEscape(itemPath)
+	resp, err := t.HTTPClient.Get(u)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", itemPath, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("read %s HTTP %d: %s", itemPath, resp.StatusCode, body)
+	}
+	return io.ReadAll(resp.Body)
+}
+
 func (t *Transport) EnsureDir(root, relDir string) error {
 	parts := strings.Split(strings.Trim(relDir, "/"), "/")
 	cur := root

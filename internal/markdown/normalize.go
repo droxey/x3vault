@@ -37,24 +37,12 @@ type NormalizedNote struct {
 }
 
 type NormalizeOpts struct {
-	VaultRoot   string
-	SourceRoot  string
-	SourceRel   string // e.g. "wiki" — output prefix on device
-	NoteIndex   map[string]string
-	AssetOutDir string
-}
-
-func BuildNoteIndex(notes []struct{ RelPath, AbsPath string }) map[string]string {
-	idx := make(map[string]string)
-	for _, n := range notes {
-		rel := n.RelPath
-		idx[rel] = rel
-		noExt := strings.TrimSuffix(rel, ".md")
-		idx[noExt] = rel
-		base := strings.TrimSuffix(filepath.Base(rel), ".md")
-		idx[base] = rel
-	}
-	return idx
+	VaultRoot        string
+	SourceRoot       string
+	SourceRel        string
+	NoteIndex        map[string]string
+	AttachmentFolder string
+	AssetOutDir      string
 }
 
 func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, error) {
@@ -93,7 +81,7 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 
 		ext := strings.ToLower(filepath.Ext(target))
 		if isImageExt(ext) {
-			asset, err := resolveAsset(target, opts)
+			asset, err := resolveAsset(target, noteDir, opts)
 			if err != nil {
 				out.Warnings = append(out.Warnings, fmt.Sprintf("missing asset %s: %v", target, err))
 				if alt == "" {
@@ -172,13 +160,31 @@ func resolveNote(target string, idx map[string]string) (string, bool) {
 	return "", false
 }
 
-func resolveAsset(target string, opts NormalizeOpts) (*AssetRef, error) {
-	candidates := []string{
-		filepath.Join(opts.VaultRoot, target),
-		filepath.Join(opts.SourceRoot, target),
-		filepath.Join(opts.VaultRoot, "Attachments", filepath.Base(target)),
-		filepath.Join(opts.VaultRoot, "assets", filepath.Base(target)),
+func assetCandidates(target, noteDir string, opts NormalizeOpts) []string {
+	base := filepath.Base(target)
+	var c []string
+	add := func(p string) {
+		if p != "" {
+			c = append(c, p)
+		}
 	}
+	if noteDir != "." && noteDir != "" {
+		add(filepath.Join(opts.SourceRoot, noteDir, target))
+	}
+	add(filepath.Join(opts.SourceRoot, target))
+	add(filepath.Join(opts.VaultRoot, target))
+	if opts.AttachmentFolder != "" {
+		add(filepath.Join(opts.AttachmentFolder, target))
+		add(filepath.Join(opts.AttachmentFolder, base))
+	}
+	add(filepath.Join(opts.VaultRoot, "Attachments", base))
+	add(filepath.Join(opts.VaultRoot, "assets", base))
+	add(filepath.Join(opts.SourceRoot, "assets", base))
+	return c
+}
+
+func resolveAsset(target, noteDir string, opts NormalizeOpts) (*AssetRef, error) {
+	candidates := assetCandidates(target, noteDir, opts)
 	var found string
 	for _, c := range candidates {
 		if st, err := os.Stat(c); err == nil && !st.IsDir() {

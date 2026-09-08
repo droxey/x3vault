@@ -1,61 +1,46 @@
 package config
 
 import (
-	"fmt"
 	"strings"
 )
 
-// FormatWikiDirsSummary renders directory rules for CLI output.
 func FormatWikiDirsSummary(w WikiDirs) string {
 	var b strings.Builder
-	b.WriteString("LLM Wiki directory rules (relative to source_root/wiki/):\n\n")
-	b.WriteString("allowed_dirs:\n")
-	if len(w.Allowed) == 0 {
-		b.WriteString("  (none — all subdirectories except ignored)\n")
-	} else {
+	b.WriteString("Wiki directory rules for github.com/droxey/x3vault (relative to wiki/):\n\n")
+	b.WriteString("mode: ")
+	b.WriteString(w.Mode)
+	b.WriteString("\n\n")
+	if w.Mode == WikiModeWhitelist {
+		b.WriteString("allowed_dirs:\n")
 		for _, d := range w.Allowed {
-			fmt.Fprintf(&b, "  - %s\n", d)
+			b.WriteString("  - ")
+			b.WriteString(d)
+			b.WriteString("\n")
 		}
+		b.WriteString("\n")
+	} else {
+		b.WriteString("all subdirectories are synced except ignored_dirs\n\n")
 	}
-	b.WriteString("\nignored_dirs:\n")
+	b.WriteString("ignored_dirs:\n")
 	if len(w.Ignored) == 0 {
 		b.WriteString("  (none)\n")
 	} else {
 		for _, d := range w.Ignored {
-			fmt.Fprintf(&b, "  - %s\n", d)
+			b.WriteString("  - ")
+			b.WriteString(d)
+			b.WriteString("\n")
 		}
 	}
-	b.WriteString("\nRoot-level *.md files (index.md, log.md, overview.md, conventions.md, etc.) are always included.\n")
-	b.WriteString("Defaults follow the Karpathy LLM Wiki layout (see github.com/microsoft/llmwiki).\n")
+	b.WriteString("\nRoot-level *.md files are always included.\n")
+	b.WriteString("raw/ is never synced (compiled wiki/ only).\n")
+	b.WriteString("Standard LLM Wiki folders: sources, entities, concepts, analyses\n")
 	return b.String()
-}
-
-func (w *WikiDirs) AddAllowed(dirs ...string) {
-	for _, d := range dirs {
-		d = cleanDirEntry(d)
-		if d == "" {
-			continue
-		}
-		if containsDir(w.Allowed, d) {
-			continue
-		}
-		w.Allowed = append(w.Allowed, d)
-	}
-	w.Normalize()
-}
-
-func (w *WikiDirs) RemoveAllowed(dirs ...string) {
-	w.Allowed = removeDirs(w.Allowed, dirs)
-	w.Normalize()
 }
 
 func (w *WikiDirs) AddIgnored(dirs ...string) {
 	for _, d := range dirs {
 		d = cleanDirEntry(d)
-		if d == "" {
-			continue
-		}
-		if containsDir(w.Ignored, d) {
+		if d == "" || containsDir(w.Ignored, d) {
 			continue
 		}
 		w.Ignored = append(w.Ignored, d)
@@ -65,6 +50,23 @@ func (w *WikiDirs) AddIgnored(dirs ...string) {
 
 func (w *WikiDirs) RemoveIgnored(dirs ...string) {
 	w.Ignored = removeDirs(w.Ignored, dirs)
+	w.Normalize()
+}
+
+func (w *WikiDirs) AddAllowed(dirs ...string) {
+	for _, d := range dirs {
+		d = cleanDirEntry(d)
+		if d == "" || containsDir(w.Allowed, d) {
+			continue
+		}
+		w.Allowed = append(w.Allowed, d)
+	}
+	w.Mode = WikiModeWhitelist
+	w.Normalize()
+}
+
+func (w *WikiDirs) RemoveAllowed(dirs ...string) {
+	w.Allowed = removeDirs(w.Allowed, dirs)
 	w.Normalize()
 }
 

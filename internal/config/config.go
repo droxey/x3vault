@@ -49,8 +49,10 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
-	if len(cfg.Wiki.Allowed) == 0 && len(cfg.Wiki.Ignored) == 0 {
+	if cfg.Wiki.Mode == "" && len(cfg.Wiki.Ignored) == 0 {
 		cfg.Wiki = DefaultWikiDirs()
+	} else if cfg.Wiki.Mode == "" {
+		cfg.Wiki.Mode = WikiModeAllExceptIgnored
 	}
 	if cfg.Schema != SchemaVersion {
 		return nil, fmt.Errorf("unsupported config schema %d (want %d)", cfg.Schema, SchemaVersion)

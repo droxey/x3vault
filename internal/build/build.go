@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/droxey/x3vault/internal/markdown"
+	"github.com/droxey/x3vault/internal/obsidian"
 	"github.com/droxey/x3vault/internal/vault"
 )
 
@@ -37,25 +38,21 @@ func Run(cfgVaultRoot, cfgSourceRoot, cfgBuildRoot string, disc *vault.Discovery
 		return nil, err
 	}
 
-	// Build note index
-	type pair struct{ RelPath, AbsPath string }
-	pairs := make([]pair, len(disc.Notes))
+	noteRefs := make([]markdown.NoteRef, len(disc.Notes))
 	for i, n := range disc.Notes {
-		pairs[i] = pair{n.RelPath, n.AbsPath}
+		noteRefs[i] = markdown.NoteRef{RelPath: n.RelPath, AbsPath: n.AbsPath}
 	}
-	// convert for BuildNoteIndex
-	idxNotes := make([]struct{ RelPath, AbsPath string }, len(pairs))
-	for i, p := range pairs {
-		idxNotes[i] = struct{ RelPath, AbsPath string }{p.RelPath, p.AbsPath}
-	}
-	noteIndex := markdown.BuildNoteIndex(idxNotes)
+	indexResult := markdown.BuildNoteIndex(noteRefs)
+	attachmentRel := obsidian.AttachmentFolder(cfgVaultRoot)
+	attachmentAbs := obsidian.ResolveAttachmentPath(cfgVaultRoot, attachmentRel)
 
 	opts := markdown.NormalizeOpts{
-		VaultRoot:   cfgVaultRoot,
-		SourceRoot:  disc.SourceRoot,
-		SourceRel:   cfgSourceRoot,
-		NoteIndex:   noteIndex,
-		AssetOutDir: assetOut,
+		VaultRoot:        cfgVaultRoot,
+		SourceRoot:       disc.SourceRoot,
+		SourceRel:        cfgSourceRoot,
+		NoteIndex:        indexResult.Index,
+		AttachmentFolder: attachmentAbs,
+		AssetOutDir:      assetOut,
 	}
 
 	res := &Result{StagingDir: staging}

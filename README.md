@@ -2,13 +2,15 @@
 
 One-way build + exact-mirror sync of an Obsidian LLM Wiki (`wiki/`) to an XTEINK X3 running Witch Reader.
 
+Canonical repo: [github.com/droxey/x3vault](https://github.com/droxey/x3vault)
+
 ## Status
 
-- [x] Config + discovery
-- [x] LLM Wiki directory rules (allowed/ignored)
-- [x] Markdown normalize + assets
+- [x] Config + discovery (`all_except_ignored` dir mode)
+- [x] Markdown normalize + Obsidian attachment folder
+- [x] Alias-aware wikilink index (duplicate keys pick last)
 - [x] Deterministic build staging
-- [x] Witch HTTP transport + ownership + exact mirror
+- [x] Witch HTTP transport + ownership + content-hash sync (fail-fast)
 - [x] CLI: device init / sync / dry-run / config dirs
 
 ## Quick start
@@ -25,48 +27,29 @@ go build -o bin/x3vault ./cmd/x3vault
 ./bin/x3vault sync --vault /path/to/llmwiki-vault
 ```
 
-## LLM Wiki layout (default)
+## LLM Wiki layout
 
-Defaults follow the [Karpathy LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) pattern used by [microsoft/llmwiki](https://github.com/microsoft/llmwiki):
+Standard folders (init warns if missing):
 
 ```
 wiki/
-├── index.md
-├── log.md
-├── overview.md          # optional hub pages (always synced)
-├── conventions.md
+├── index.md, log.md, overview.md, …   # all root *.md synced
 ├── sources/
 ├── entities/
 ├── concepts/
 └── analyses/
 ```
 
-Root-level `*.md` files are always included. Subdirectories are filtered by `wiki.allowed_dirs` and `wiki.ignored_dirs` in `.x3vault.yaml`.
+**Directory policy (default):** `all_except_ignored` — every subdirectory under `wiki/` is synced **except** ignored ones. Custom folders (`domains/`, `synthesis/`, etc.) need no extra config.
 
-Default **allowed**: `sources`, `entities`, `concepts`, `analyses`  
-Default **ignored**: `script`, `references` (tooling/meta, not reader content)
-
-Add custom folders (e.g. `domains`, `synthesis`):
+**Never synced:** `raw/` (outside `wiki/`), ignored dirs (`script/`, `references/` by default).
 
 ```bash
-./bin/x3vault config dirs allow domains synthesis --vault /path/to/vault
-./bin/x3vault config dirs                    # show current rules
-./bin/x3vault config dirs restore            # reset to LLM Wiki defaults
+./bin/x3vault config dirs                         # show rules
+./bin/x3vault config dirs ignore drafts           # exclude a folder
+./bin/x3vault config dirs unignore drafts
+./bin/x3vault config dirs restore                 # reset defaults
 ```
-
-## Commands
-
-| Command | Behavior |
-|---------|----------|
-| `init --vault PATH` | Write `.x3vault.yaml`, verify `wiki/` |
-| `build` | Discover → normalize → emit staging |
-| `device init` | Create `/x3vault` + ownership marker |
-| `sync [--dry-run]` | Exact-mirror local build → device |
-| `doctor` | Paths, note count, device reachability |
-| `config dirs` | Show allowed/ignored directory rules |
-| `config dirs restore` | Restore LLM Wiki default dirs |
-| `config dirs allow DIR...` | Add allowed subdirectory |
-| `config dirs ignore DIR...` | Add ignored subdirectory |
 
 ## Config example
 
@@ -76,12 +59,7 @@ vault_root: .
 source_root: wiki
 build_root: .x3vault/build
 wiki:
-  allowed_dirs:
-    - sources
-    - entities
-    - concepts
-    - analyses
-    - domains          # custom extension
+  mode: all_except_ignored
   ignored_dirs:
     - script
     - references
@@ -90,9 +68,13 @@ device:
   root: /x3vault
 ```
 
+## Sync
+
+Sync compares **SHA-256 content hashes**. After a successful sync, x3vault writes `/x3vault/_meta/file-hashes.json` on the device. Sync **fails fast** on the first error (device left unchanged if hash manifest update fails).
+
 ## Safety
 
-- Source is always `wiki/` (case-sensitive).
-- One-way only. Vault is never written (except `.x3vault.yaml` via `config dirs`).
+- Source is always `wiki/` only; `raw/` never uploaded.
+- One-way only. Vault is never written except `.x3vault.yaml` via `config dirs`.
 - Deletes only under owned `/x3vault/` after ownership marker is present.
 - `_meta/` is never deleted by sync.
