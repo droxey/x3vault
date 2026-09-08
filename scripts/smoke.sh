@@ -6,7 +6,9 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 cd "$ROOT"
-GOBIN="$ROOT/bin" go install ./cmd/x3vault
+# shellcheck source=scripts/version-ldflags.sh
+source "$ROOT/scripts/version-ldflags.sh"
+GOBIN="$ROOT/bin" go install -ldflags "$LDFLAGS" ./cmd/x3vault
 export PATH="$ROOT/bin:$PATH"
 
 VAULT="$TMP/vault"

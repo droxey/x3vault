@@ -10,7 +10,7 @@ Build output is **markdown for on-device reading**: wikilinks become relative li
 
 **Requirements**
 
-- Go **1.22+** ([`go.mod`](go.mod) pins `1.22.2`)
+- Go **1.25+** ([`go.mod`](go.mod) pins `1.25` with `toolchain go1.25.13`)
 - An Obsidian vault with a `wiki/` source tree (LLM Wiki layout)
 - For device sync: XTE on **File Transfer / Wi-Fi** (Witch Reader transfer screen)
 
@@ -92,6 +92,7 @@ x3vault build [--vault PATH] [--json]
 - Normalizes markdown for XTE e-readers
 - Copies referenced attachments to `{build_root}/current/assets/`
 - Backs up prior `{build_root}/current/` → `{build_root}/backup/` before building; restores backup if the build fails
+- Fails without promoting if any note normalization errors occur
 
 Exit **2** config error · **3** discovery/build error
 
@@ -122,9 +123,19 @@ x3vault doctor [--vault PATH] [--json]
 x3vault status [--vault PATH] [--json]   # alias for doctor
 ```
 
-Prints vault paths, note count, build `current/` / `backup/` status, sync settings, and device connectivity.
+Prints vault paths, note count, build `current/` / `backup/` status, sync settings, CLI version, and device connectivity.
 
 Exit **2** config · **3** discovery error
+
+#### `version` — print CLI version
+
+```bash
+x3vault version
+```
+
+Prints version and commit (set at link time via `-ldflags`; see **Testing** → smoke script).
+
+Exit **0**
 
 #### `config` — view or edit settings
 
@@ -192,20 +203,27 @@ go test ./internal/sync/... -v   # includes mock device init + sync
 
 ```bash
 x3vault help
+x3vault version
 ```
 
 **CI**
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR to `main`:
 
-- `go test ./... -count=1`
-- `bash scripts/smoke.sh` — `go install` + end-to-end `init` → `build` → `doctor`
+- `go mod tidy` check
+- `go vet ./...`
+- `staticcheck ./...`
+- `govulncheck ./...`
+- `go test ./... -race`
+- `bash scripts/smoke.sh` — `go install` (with version ldflags) + end-to-end `init` → `build` → `doctor` → `version`
 
 **Smoke test** (no device required)
 
 ```bash
 bash scripts/smoke.sh
 ```
+
+The smoke script installs via `go install -ldflags …` using `scripts/version-ldflags.sh` so `x3vault version` reports the git describe/commit.
 
 Or manually:
 
