@@ -22,7 +22,7 @@ func TestBuildNoteIndexAliases(t *testing.T) {
 	res := BuildNoteIndex([]NoteRef{{
 		RelPath: "entities/memex.md",
 		AbsPath: notePath,
-	}})
+	}}, fixtureNoteReader(t, dir))
 
 	if got := res.Index["Bush Memex"]; got != "entities/memex.md" {
 		t.Fatalf("alias index = %q", got)
@@ -47,7 +47,7 @@ func TestBuildNoteIndexDuplicateBasenamePicksLast(t *testing.T) {
 	res := BuildNoteIndex([]NoteRef{
 		{RelPath: "entities/foo.md", AbsPath: a},
 		{RelPath: "concepts/foo.md", AbsPath: b},
-	})
+	}, fixtureNoteReader(t, dir))
 	if got := res.Index["foo"]; got != "concepts/foo.md" {
 		t.Fatalf("expected last-wins basename, got %q", got)
 	}

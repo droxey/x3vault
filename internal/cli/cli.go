@@ -3,10 +3,12 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/droxey/x3vault/internal/build"
@@ -27,11 +29,25 @@ const (
 
 // Run executes the CLI and returns a process exit code. os.Exit should only be called from main.
 func Run(ctx context.Context, args []string) int {
-	if len(args) < 2 {
+	validated, help, err := validateArgs(args)
+	if err != nil {
+		if len(args) > 1 && requestedJSON(args[2:]) {
+			command := args[1]
+			if command == "device" && len(args) > 2 && args[2] == "init" {
+				command = "device init"
+			}
+			res := contract.NewResult(command)
+			res.AddError(err.Error(), "")
+			return finish(res, true, exitUsage)
+		}
+		fmt.Fprintln(os.Stderr, err)
 		printUsage(os.Stderr)
 		return exitUsage
 	}
-
+	if help {
+		return showHelp()
+	}
+	args = validated
 	cmd := args[1]
 	cmdArgs := args[2:]
 
@@ -48,17 +64,14 @@ func Run(ctx context.Context, args []string) int {
 		return exitUsage
 	case "sync":
 		return runSync(ctx, cmdArgs, os.Stderr)
-	case "doctor":
-		return runDoctor(ctx, cmdArgs, os.Stderr)
-	case "status":
+	case "doctor", "status":
 		return runDoctor(ctx, cmdArgs, os.Stderr)
 	case "config":
 		return runConfig(cmdArgs)
 	case "version", "-version", "--version":
 		return runVersion(os.Stdout)
 	case "help", "-h", "--help":
-		printUsage(os.Stderr)
-		return exitOK
+		return showHelp()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
 		printUsage(os.Stderr)
@@ -67,12 +80,15 @@ func Run(ctx context.Context, args []string) int {
 }
 
 func runVersion(out io.Writer) int {
-	fmt.Fprintf(out, "x3vault %s (%s)\n", Version, Commit)
+	if _, err := fmt.Fprintf(out, "x3vault %s (%s)\n", Version, Commit); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitInternal
+	}
 	return exitOK
 }
 
-func printUsage(w io.Writer) {
-	fmt.Fprint(w, `x3vault — slim v0: build Obsidian wiki for XTE e-readers, sync to XTEINK
+func printUsage(w io.Writer) error {
+	_, err := fmt.Fprint(w, `x3vault — slim v0: build Obsidian wiki for XTE e-readers, sync to XTEINK
 
 Usage:
   x3vault init --vault PATH
@@ -97,6 +113,30 @@ Usage:
 Notes:
   Device must be on its File Transfer / Wi-Fi screen before device init or sync.
 `)
+	return err
+}
+
+func showHelp() int {
+	if err := printUsage(os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitInternal
+	}
+	return exitOK
+}
+
+// requestedJSON handles invalid invocations without mistaking a vault value for
+// an output flag. Valid invocations are already normalized by validateArgs.
+func requestedJSON(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--vault" {
+			i++
+			continue
+		}
+		if args[i] == "--json" {
+			return true
+		}
+	}
+	return false
 }
 
 func flagVault(args []string) string {
@@ -108,23 +148,9 @@ func flagVault(args []string) string {
 	return ""
 }
 
-func wantJSON(args []string) bool {
-	for _, a := range args {
-		if a == "--json" {
-			return true
-		}
-	}
-	return false
-}
+func wantJSON(args []string) bool { return slices.Contains(args, "--json") }
 
-func wantDryRun(args []string) bool {
-	for _, a := range args {
-		if a == "--dry-run" {
-			return true
-		}
-	}
-	return false
-}
+func wantDryRun(args []string) bool { return slices.Contains(args, "--dry-run") }
 
 func configPath(vault string) string {
 	if vault == "" {
@@ -198,14 +224,13 @@ func runConfigShow(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return exitUsage
 	}
-	fmt.Fprint(os.Stdout, config.FormatConfigYAML(cfg))
-	return exitOK
+	return writeOutput(config.FormatConfigYAML(cfg))
 }
 
 func runConfigRestore(args []string) int {
 	vaultPath := flagVault(args)
 	cfgPath := configPath(vaultPath)
-	_, err := config.UpdateConfig(cfgPath, func(cfg *config.Config) error {
+	cfg, err := config.UpdateConfig(cfgPath, func(cfg *config.Config) error {
 		cfg.RestoreDefaultsPreservingVault()
 		return nil
 	})
@@ -214,13 +239,7 @@ func runConfigRestore(args []string) int {
 		return exitInternal
 	}
 	fmt.Fprintln(os.Stderr, "restored default config (vault_root preserved)")
-	cfg, err := config.LoadFromPath(cfgPath)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return exitInternal
-	}
-	fmt.Fprint(os.Stdout, config.FormatConfigYAML(cfg))
-	return exitOK
+	return writeOutput(config.FormatConfigYAML(cfg))
 }
 
 func runConfigDirs(args []string) int {
@@ -242,16 +261,14 @@ func runConfigDirs(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return exitUsage
 		}
-		fmt.Fprint(os.Stdout, config.FormatWikiDirsSummary(cfg.Wiki))
-		return exitOK
+		return writeOutput(config.FormatWikiDirsSummary(cfg.Wiki))
 	}
 
 	sub := tokens[0]
 	dirArgs := tokens[1:]
 
-	switch sub {
-	case "restore":
-		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
+	if sub == "restore" {
+		cfg, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
 			w.RestoreDefaults()
 			return nil
 		})
@@ -260,77 +277,33 @@ func runConfigDirs(args []string) int {
 			return exitInternal
 		}
 		fmt.Fprintln(os.Stderr, "restored LLM Wiki default directory rules")
-		cfg, err := config.LoadFromPath(cfgPath)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return exitInternal
-		}
-		fmt.Fprint(os.Stdout, config.FormatWikiDirsSummary(cfg.Wiki))
-		return exitOK
-	case "allow":
-		if len(dirArgs) == 0 {
-			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs allow DIR...")
-			return exitUsage
-		}
-		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
-			w.AddAllowed(dirArgs...)
-			return w.Validate()
-		})
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return exitInternal
-		}
-		fmt.Fprintf(os.Stderr, "switched to whitelist mode; added allowed dirs: %s\n", strings.Join(dirArgs, ", "))
-		return exitOK
-	case "unallow":
-		if len(dirArgs) == 0 {
-			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs unallow DIR...")
-			return exitUsage
-		}
-		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
-			w.RemoveAllowed(dirArgs...)
-			return w.Validate()
-		})
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return exitInternal
-		}
-		fmt.Fprintf(os.Stderr, "removed allowed dirs: %s\n", strings.Join(dirArgs, ", "))
-		return exitOK
-	case "ignore":
-		if len(dirArgs) == 0 {
-			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs ignore DIR...")
-			return exitUsage
-		}
-		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
-			w.AddIgnored(dirArgs...)
-			return w.Validate()
-		})
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return exitInternal
-		}
-		fmt.Fprintf(os.Stderr, "added ignored dirs: %s\n", strings.Join(dirArgs, ", "))
-		return exitOK
-	case "unignore":
-		if len(dirArgs) == 0 {
-			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs unignore DIR...")
-			return exitUsage
-		}
-		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
-			w.RemoveIgnored(dirArgs...)
-			return w.Validate()
-		})
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return exitInternal
-		}
-		fmt.Fprintf(os.Stderr, "removed ignored dirs: %s\n", strings.Join(dirArgs, ", "))
-		return exitOK
-	default:
+		return writeOutput(config.FormatWikiDirsSummary(cfg.Wiki))
+	}
+	updates := map[string]func(*config.WikiDirs, ...string){
+		"allow":    (*config.WikiDirs).AddAllowed,
+		"unallow":  (*config.WikiDirs).RemoveAllowed,
+		"ignore":   (*config.WikiDirs).AddIgnored,
+		"unignore": (*config.WikiDirs).RemoveIgnored,
+	}
+	update, ok := updates[sub]
+	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown config dirs command: %s\n", sub)
 		return exitUsage
 	}
+	if len(dirArgs) == 0 {
+		fmt.Fprintf(os.Stderr, "usage: x3vault config dirs %s DIR...\n", sub)
+		return exitUsage
+	}
+	_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
+		update(w, dirArgs...)
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitUsage
+	}
+	fmt.Fprintf(os.Stderr, "%s: %s\n", sub, strings.Join(dirArgs, ", "))
+	return exitOK
 }
 
 func runBuild(ctx context.Context, args []string, progress io.Writer) int {
@@ -340,45 +313,41 @@ func runBuild(ctx context.Context, args []string, progress io.Writer) int {
 	cfg, err := loadConfig(flagVault(args))
 	if err != nil {
 		res.AddError(err.Error(), "")
-		emit(res, jsonOut)
-		return exitUsage
+		return finish(res, jsonOut, exitUsage)
 	}
 
-	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot, cfg.Wiki)
+	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot, cfg.Wiki, cfg.Sync.ExcludeVaultPaths)
 	if err != nil {
 		res.AddError(err.Error(), cfg.SourceDir())
-		emit(res, jsonOut)
-		return exitBuild
+		return finish(res, jsonOut, exitBuild)
 	}
 
 	fmt.Fprintf(progress, "discovered %d notes under %s\n", len(disc.Notes), disc.SourceRoot)
 
-	br, err := build.Run(cfg, disc, build.RunOptions{Progress: progress})
+	br, err := build.Run(cfg, disc, build.RunOptions{Progress: progress, Context: ctx})
+	if br != nil {
+		res.Summary.Notes = br.Notes
+		res.Summary.Assets = br.Assets
+		res.Generation = br.Generation
+		for _, w := range br.Warnings {
+			res.AddWarning(w, "")
+		}
+		for _, e := range br.Errors {
+			res.AddError(e, "")
+		}
+	}
 	if err != nil {
 		res.AddError(err.Error(), cfg.BuildRoot)
-		emit(res, jsonOut)
-		return exitBuild
-	}
-
-	res.Summary.Notes = br.Notes
-	res.Summary.Assets = br.Assets
-	res.Generation = br.Generation
-	for _, w := range br.Warnings {
-		res.AddWarning(w, "")
-	}
-	for _, e := range br.Errors {
-		res.AddError(e, "")
+		return finish(res, jsonOut, exitBuild)
 	}
 
 	fmt.Fprintf(progress, "built generation %s → %s\n", br.Generation, br.StagingDir)
 	fmt.Fprintf(progress, "  notes: %d  assets: %d  warnings: %d\n", br.Notes, br.Assets, len(br.Warnings))
 
 	if !res.OK {
-		emit(res, jsonOut)
-		return exitBuild
+		return finish(res, jsonOut, exitBuild)
 	}
-	emit(res, jsonOut)
-	return exitOK
+	return finish(res, jsonOut, exitOK)
 }
 
 func runDeviceInit(ctx context.Context, args []string, progress io.Writer) int {
@@ -388,8 +357,7 @@ func runDeviceInit(ctx context.Context, args []string, progress io.Writer) int {
 	cfg, err := loadConfig(flagVault(args))
 	if err != nil {
 		res.AddError(err.Error(), "")
-		emit(res, jsonOut)
-		return exitUsage
+		return finish(res, jsonOut, exitUsage)
 	}
 
 	t := syncTransport(cfg)
@@ -397,20 +365,17 @@ func runDeviceInit(ctx context.Context, args []string, progress io.Writer) int {
 	if err != nil {
 		printDeviceUnreachable(progress, err)
 		res.AddError(err.Error(), "")
-		emit(res, jsonOut)
-		return exitDevice
+		return finish(res, jsonOut, exitDevice)
 	}
 	fmt.Fprintf(progress, "device: %s  firmware: %s  mode: %s  ip: %s\n", st.Device, st.Version, st.Mode, st.IP)
 
 	opts := syncOpts(cfg, progress)
 	if err := sync.DeviceInit(ctx, t, opts.DeviceRoot, opts.OwnershipTool); err != nil {
 		res.AddError(err.Error(), opts.DeviceRoot)
-		emit(res, jsonOut)
-		return exitSync
+		return finish(res, jsonOut, exitSync)
 	}
 	fmt.Fprintf(progress, "ownership marker written at %s/_meta/ownership.json\n", opts.DeviceRoot)
-	emit(res, jsonOut)
-	return exitOK
+	return finish(res, jsonOut, exitOK)
 }
 
 func runSync(ctx context.Context, args []string, progress io.Writer) int {
@@ -421,15 +386,13 @@ func runSync(ctx context.Context, args []string, progress io.Writer) int {
 	cfg, err := loadConfig(flagVault(args))
 	if err != nil {
 		res.AddError(err.Error(), "")
-		emit(res, jsonOut)
-		return exitUsage
+		return finish(res, jsonOut, exitUsage)
 	}
 
 	current := filepath.Join(cfg.BuildRoot, "current")
 	if st, err := os.Stat(current); err != nil || !st.IsDir() {
 		res.AddError("no local build; run: x3vault build", current)
-		emit(res, jsonOut)
-		return exitBuild
+		return finish(res, jsonOut, exitBuild)
 	}
 
 	t := syncTransport(cfg)
@@ -437,8 +400,7 @@ func runSync(ctx context.Context, args []string, progress io.Writer) int {
 	if err != nil {
 		printDeviceUnreachable(progress, err)
 		res.AddError(err.Error(), "")
-		emit(res, jsonOut)
-		return exitDevice
+		return finish(res, jsonOut, exitDevice)
 	}
 	fmt.Fprintf(progress, "device: %s  firmware: %s  mode: %s\n", st.Device, st.Version, st.Mode)
 
@@ -446,8 +408,7 @@ func runSync(ctx context.Context, args []string, progress io.Writer) int {
 	plan, err := sync.BuildPlan(ctx, t, opts.DeviceRoot, current, opts)
 	if err != nil {
 		res.AddError(err.Error(), cfg.Device.Root)
-		emit(res, jsonOut)
-		return exitSync
+		return finish(res, jsonOut, exitSync)
 	}
 
 	fileDeletes, dirDeletes := 0, 0
@@ -477,12 +438,10 @@ func runSync(ctx context.Context, args []string, progress io.Writer) int {
 	}
 
 	if !res.OK {
-		fmt.Fprintln(progress, "sync failed (fail-fast; device may be partially updated)")
-		emit(res, jsonOut)
-		return exitDevice
+		fmt.Fprintln(progress, "sync failed; device may be partially updated")
+		return finish(res, jsonOut, exitDevice)
 	}
-	emit(res, jsonOut)
-	return exitOK
+	return finish(res, jsonOut, exitOK)
 }
 
 func runDoctor(ctx context.Context, args []string, progress io.Writer) int {
@@ -492,15 +451,13 @@ func runDoctor(ctx context.Context, args []string, progress io.Writer) int {
 	cfg, err := loadConfig(flagVault(args))
 	if err != nil {
 		res.AddError(err.Error(), "")
-		emit(res, jsonOut)
-		return exitUsage
+		return finish(res, jsonOut, exitUsage)
 	}
 
-	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot, cfg.Wiki)
+	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot, cfg.Wiki, cfg.Sync.ExcludeVaultPaths)
 	if err != nil {
 		res.AddError(err.Error(), cfg.SourceDir())
-		emit(res, jsonOut)
-		return exitBuild
+		return finish(res, jsonOut, exitBuild)
 	}
 
 	res.Summary.Notes = len(disc.Notes)
@@ -519,18 +476,22 @@ func runDoctor(ctx context.Context, args []string, progress io.Writer) int {
 	t := syncTransport(cfg)
 	if st, err := t.Status(ctx); err != nil {
 		printDeviceUnreachable(progress, err)
+		res.AddWarning("device unreachable: "+err.Error(), cfg.Device.BaseURL)
 	} else {
 		fmt.Fprintf(progress, "device:  online %s/%s heap=%d\n", st.Device, st.Version, st.FreeHeap)
-		owned, err := sync.HasOwnership(ctx, t, cfg.DeviceRoot())
+		owned, err := sync.HasOwnership(ctx, t, cfg.DeviceRoot(), cfg.Device.OwnershipTool)
 		if err != nil {
 			fmt.Fprintf(progress, "owned:   unknown (%v)\n", err)
+			res.AddWarning("ownership check: "+err.Error(), cfg.DeviceRoot())
 		} else {
 			fmt.Fprintf(progress, "owned:   %v\n", owned)
+			if !owned {
+				res.AddWarning("device root is unowned; run: x3vault device init", cfg.DeviceRoot())
+			}
 		}
 	}
 
-	emit(res, jsonOut)
-	return exitOK
+	return finish(res, jsonOut, exitOK)
 }
 
 func syncTransport(cfg *config.Config) *sync.Transport {
@@ -564,18 +525,21 @@ func printBuildDirStatus(progress io.Writer, buildRoot string) {
 }
 
 func loadConfig(vaultFlag string) (*config.Config, error) {
+	if vaultFlag != "" {
+		abs, err := filepath.Abs(vaultFlag)
+		if err != nil {
+			return nil, fmt.Errorf("vault path: %w", err)
+		}
+		vaultFlag = abs
+	}
 	path := configPath(vaultFlag)
 	cfg, err := config.Load(path)
 	if err != nil {
-		if vaultFlag != "" {
-			cfg = config.Default()
-			cfg.VaultRoot = vaultFlag
-			if err := cfg.Resolve(path); err != nil {
-				return nil, err
-			}
-			return cfg, nil
+		if vaultFlag == "" || !errors.Is(err, os.ErrNotExist) {
+			return nil, err
 		}
-		return nil, err
+		cfg = config.Default()
+		cfg.VaultRoot = vaultFlag
 	}
 	if err := cfg.Resolve(path); err != nil {
 		return nil, err
@@ -583,14 +547,15 @@ func loadConfig(vaultFlag string) (*config.Config, error) {
 	return cfg, nil
 }
 
-func emit(res *contract.Result, jsonOut bool) {
+func emit(res *contract.Result, jsonOut bool) error {
+	var outputErr error
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(res); err != nil {
-			fmt.Fprintf(os.Stderr, "encode json: %v\n", err)
+			outputErr = fmt.Errorf("encode json: %w", err)
+			fmt.Fprintln(os.Stderr, outputErr)
 		}
-		return
 	}
 	for _, d := range res.Diagnostics {
 		prefix := d.Level + ": "
@@ -600,4 +565,20 @@ func emit(res *contract.Result, jsonOut bool) {
 			fmt.Fprintf(os.Stderr, "%s%s\n", prefix, d.Message)
 		}
 	}
+	return outputErr
+}
+
+func finish(res *contract.Result, jsonOut bool, code int) int {
+	if err := emit(res, jsonOut); err != nil {
+		return exitInternal
+	}
+	return code
+}
+
+func writeOutput(text string) int {
+	if _, err := fmt.Fprint(os.Stdout, text); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return exitInternal
+	}
+	return exitOK
 }

@@ -8,10 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 	"time"
 )
@@ -108,8 +108,19 @@ func (t *Transport) List(ctx context.Context, dirPath string) ([]FileEntry, erro
 		return nil, fmt.Errorf("list %s HTTP %d: %s", dirPath, resp.StatusCode, body)
 	}
 	var entries []FileEntry
-	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+	decoder := json.NewDecoder(resp.Body)
+	if err := decoder.Decode(&entries); err != nil {
 		return nil, fmt.Errorf("list decode: %w", err)
+	}
+	if entries == nil {
+		return nil, fmt.Errorf("list decode: expected a directory array, got null")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err != nil {
+			return nil, fmt.Errorf("list trailing data: %w", err)
+		}
+		return nil, fmt.Errorf("list decode: unexpected value after directory array")
 	}
 	return entries, nil
 }
@@ -134,7 +145,15 @@ func (t *Transport) Mkdir(ctx context.Context, parent, name string) error {
 	body, _ := readLimitedBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		if strings.Contains(string(body), "already exists") {
-			return nil
+			entries, err := t.List(ctx, parent)
+			if err != nil {
+				return fmt.Errorf("verify existing directory: %w", err)
+			}
+			for _, entry := range entries {
+				if entry.Name == name && entry.IsDirectory {
+					return nil
+				}
+			}
 		}
 		return fmt.Errorf("mkdir %s/%s HTTP %d: %s", parent, name, resp.StatusCode, body)
 	}
@@ -214,35 +233,10 @@ func (t *Transport) ReadFile(ctx context.Context, itemPath string) ([]byte, erro
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := readLimitedBody(resp.Body)
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("read %s HTTP %d: %w", itemPath, resp.StatusCode, fs.ErrNotExist)
+		}
 		return nil, fmt.Errorf("read %s HTTP %d: %s", itemPath, resp.StatusCode, body)
 	}
-	return readLimitedBody(resp.Body)
-}
-
-func (t *Transport) EnsureDir(ctx context.Context, root, relDir string) error {
-	parts := strings.Split(strings.Trim(relDir, "/"), "/")
-	cur := root
-	for _, p := range parts {
-		if p == "" {
-			continue
-		}
-		entries, err := t.List(ctx, cur)
-		if err != nil {
-			return err
-		}
-		exists := false
-		for _, e := range entries {
-			if e.Name == p && e.IsDirectory {
-				exists = true
-				break
-			}
-		}
-		if !exists {
-			if err := t.Mkdir(ctx, cur, p); err != nil {
-				return err
-			}
-		}
-		cur = path.Join(cur, p)
-	}
-	return nil
+	return io.ReadAll(resp.Body)
 }

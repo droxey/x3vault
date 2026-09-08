@@ -32,8 +32,8 @@ func TestDeviceTimeoutDefault(t *testing.T) {
 	}
 	cfg.Device.TimeoutSeconds = 0
 	cfg.Normalize()
-	if cfg.DeviceTimeout() != 60*time.Second {
-		t.Fatalf("normalized timeout = %v", cfg.DeviceTimeout())
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("explicit zero timeout must be rejected")
 	}
 }
 

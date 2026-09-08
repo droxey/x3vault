@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -23,19 +24,13 @@ func TestAssertBuildWritePathRejectsVaultWiki(t *testing.T) {
 	}
 }
 
-func TestIsObsidianManagedPath(t *testing.T) {
+func TestAssertBuildWritePathRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
-	wiki := filepath.Join(root, "wiki", "index.md")
-	obs := filepath.Join(root, ".obsidian", "app.json")
-	build := filepath.Join(filepath.Dir(root), config.EreaderDirName, "build", "current", "wiki", "index.md")
-
-	if !IsObsidianManagedPath(wiki, root, "wiki") {
-		t.Fatal("wiki path should be obsidian-managed")
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "current")); err != nil {
+		t.Skip(err)
 	}
-	if !IsObsidianManagedPath(obs, root, "wiki") {
-		t.Fatal(".obsidian path should be obsidian-managed")
-	}
-	if IsObsidianManagedPath(build, root, "wiki") {
-		t.Fatal("build output should not be obsidian-managed")
+	if err := AssertBuildWritePath(filepath.Join(root, "current", "new", "note.md"), root); err == nil {
+		t.Fatal("accepted symlink write escape")
 	}
 }
