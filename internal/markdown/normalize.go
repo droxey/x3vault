@@ -39,6 +39,7 @@ type NormalizedNote struct {
 type NormalizeOpts struct {
 	VaultRoot   string
 	SourceRoot  string
+	SourceRel   string // e.g. "wiki" — output prefix on device
 	NoteIndex   map[string]string
 	AssetOutDir string
 }
@@ -104,7 +105,7 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 			if alt == "" {
 				alt = filepath.Base(target)
 			}
-			href := relPathFromNote(noteDir, asset.DeviceRel)
+			href := relPathFromNote(noteDir, asset.DeviceRel, opts.SourceRel)
 			return fmt.Sprintf("![%s](%s)", alt, href)
 		}
 
@@ -117,7 +118,7 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 		if label == "" {
 			label = strings.TrimSuffix(filepath.Base(resolved), ".md")
 		}
-		href := relPathFromNote(noteDir, resolved)
+		href := relPathFromNote(noteDir, resolved, opts.SourceRel)
 		return fmt.Sprintf("[%s](%s)", label, href)
 	})
 
@@ -142,7 +143,7 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 			return fmt.Sprintf("[%s](%s)", label, target)
 		}
 
-		href := relPathFromNote(noteDir, resolved)
+		href := relPathFromNote(noteDir, resolved, opts.SourceRel)
 		if heading != "" {
 			href += "#" + slugify(heading)
 		}
@@ -215,11 +216,11 @@ func resolveAsset(target string, opts NormalizeOpts) (*AssetRef, error) {
 	}, nil
 }
 
-func relPathFromNote(noteDir, target string) string {
-	from := filepath.Join("wiki", noteDir)
+func relPathFromNote(noteDir, target, sourceRel string) string {
+	from := filepath.Join(sourceRel, noteDir)
 	to := target
 	if !strings.HasPrefix(target, "assets/") {
-		to = filepath.Join("wiki", target)
+		to = filepath.Join(sourceRel, target)
 	}
 	rel, err := filepath.Rel(from, to)
 	if err != nil {

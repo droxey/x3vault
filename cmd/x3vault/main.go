@@ -41,6 +41,8 @@ func main() {
 		runDoctor(args)
 	case "status":
 		runStatus(args)
+	case "config":
+		runConfig(args)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -60,6 +62,12 @@ Usage:
   x3vault sync [--vault PATH] [--dry-run]
   x3vault doctor [--vault PATH]
   x3vault status [--vault PATH]
+  x3vault config dirs [--vault PATH]
+  x3vault config dirs restore [--vault PATH]
+  x3vault config dirs allow DIR... [--vault PATH]
+  x3vault config dirs unallow DIR... [--vault PATH]
+  x3vault config dirs ignore DIR... [--vault PATH]
+  x3vault config dirs unignore DIR... [--vault PATH]
 
 Options:
   --vault PATH   Vault root (default: current directory or config)
@@ -133,6 +141,117 @@ func runInit(args []string) {
 	}
 	fmt.Fprintf(os.Stderr, "wrote %s\n", cfgPath)
 	fmt.Fprintf(os.Stderr, "source: %s\n", wiki)
+	fmt.Fprint(os.Stderr, config.FormatWikiDirsSummary(config.DefaultWikiDirs()))
+}
+
+func runConfig(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: x3vault config dirs ...")
+		os.Exit(2)
+	}
+	if args[0] != "dirs" {
+		fmt.Fprintf(os.Stderr, "unknown config command: %s\n", args[0])
+		os.Exit(2)
+	}
+	runConfigDirs(args[1:])
+}
+
+func runConfigDirs(args []string) {
+	vaultPath := flagVault(args)
+	cfgPath := configPath(vaultPath)
+
+	var tokens []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--vault" {
+			i++
+			continue
+		}
+		tokens = append(tokens, args[i])
+	}
+
+	if len(tokens) == 0 {
+		cfg, err := loadConfig(vaultPath)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprint(os.Stdout, config.FormatWikiDirsSummary(cfg.Wiki))
+		return
+	}
+
+	sub := tokens[0]
+	dirArgs := tokens[1:]
+
+	switch sub {
+	case "restore":
+		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
+			w.RestoreDefaults()
+			return nil
+		})
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprintln(os.Stderr, "restored LLM Wiki default directory rules")
+		cfg, err := config.LoadFromPath(cfgPath)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprint(os.Stdout, config.FormatWikiDirsSummary(cfg.Wiki))
+	case "allow":
+		if len(dirArgs) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs allow DIR...")
+			os.Exit(2)
+		}
+		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
+			w.AddAllowed(dirArgs...)
+			return w.Validate()
+		})
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "added allowed dirs: %s\n", strings.Join(dirArgs, ", "))
+	case "unallow":
+		if len(dirArgs) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs unallow DIR...")
+			os.Exit(2)
+		}
+		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
+			w.RemoveAllowed(dirArgs...)
+			return w.Validate()
+		})
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "removed allowed dirs: %s\n", strings.Join(dirArgs, ", "))
+	case "ignore":
+		if len(dirArgs) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs ignore DIR...")
+			os.Exit(2)
+		}
+		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
+			w.AddIgnored(dirArgs...)
+			return w.Validate()
+		})
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "added ignored dirs: %s\n", strings.Join(dirArgs, ", "))
+	case "unignore":
+		if len(dirArgs) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: x3vault config dirs unignore DIR...")
+			os.Exit(2)
+		}
+		_, err := config.UpdateWikiDirs(cfgPath, func(w *config.WikiDirs) error {
+			w.RemoveIgnored(dirArgs...)
+			return w.Validate()
+		})
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "removed ignored dirs: %s\n", strings.Join(dirArgs, ", "))
+	default:
+		fmt.Fprintf(os.Stderr, "unknown config dirs command: %s\n", sub)
+		os.Exit(2)
+	}
 }
 
 func runBuild(args []string) {
@@ -146,7 +265,7 @@ func runBuild(args []string) {
 		os.Exit(2)
 	}
 
-	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot)
+	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot, cfg.Wiki)
 	if err != nil {
 		res.AddError(err.Error(), cfg.SourceDir())
 		emit(res, jsonOut)
@@ -281,7 +400,7 @@ func runDoctor(args []string) {
 		os.Exit(2)
 	}
 
-	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot)
+	disc, err := vault.Discover(cfg.VaultRoot, cfg.SourceRoot, cfg.Wiki)
 	if err != nil {
 		res.AddError(err.Error(), cfg.SourceDir())
 		emit(res, jsonOut)
@@ -292,6 +411,7 @@ func runDoctor(args []string) {
 	fmt.Fprintf(os.Stderr, "vault:   %s\n", cfg.VaultRoot)
 	fmt.Fprintf(os.Stderr, "source:  %s\n", disc.SourceRoot)
 	fmt.Fprintf(os.Stderr, "notes:   %d\n", len(disc.Notes))
+	fmt.Fprintf(os.Stderr, "dirs:    allowed=%d ignored=%d\n", len(cfg.Wiki.Allowed), len(cfg.Wiki.Ignored))
 	fmt.Fprintf(os.Stderr, "build:   %s\n", cfg.BuildRoot)
 	fmt.Fprintf(os.Stderr, "device:  %s%s\n", cfg.Device.BaseURL, cfg.Device.Root)
 

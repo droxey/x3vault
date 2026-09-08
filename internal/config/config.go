@@ -21,6 +21,7 @@ type Config struct {
 	SourceRoot string       `yaml:"source_root"`
 	BuildRoot  string       `yaml:"build_root"`
 	EPUB       bool         `yaml:"epub"`
+	Wiki       WikiDirs     `yaml:"wiki"`
 	Device     DeviceConfig `yaml:"device"`
 }
 
@@ -31,6 +32,7 @@ func Default() *Config {
 		SourceRoot: "wiki",
 		BuildRoot:  ".x3vault/build",
 		EPUB:       false,
+		Wiki:       DefaultWikiDirs(),
 		Device: DeviceConfig{
 			BaseURL: "http://crosspoint.local",
 			Root:    "/x3vault",
@@ -47,11 +49,18 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	if len(cfg.Wiki.Allowed) == 0 && len(cfg.Wiki.Ignored) == 0 {
+		cfg.Wiki = DefaultWikiDirs()
+	}
 	if cfg.Schema != SchemaVersion {
 		return nil, fmt.Errorf("unsupported config schema %d (want %d)", cfg.Schema, SchemaVersion)
 	}
 	if cfg.SourceRoot != "wiki" {
 		return nil, fmt.Errorf("v0 requires source_root: wiki (got %q)", cfg.SourceRoot)
+	}
+	cfg.Wiki.Normalize()
+	if err := cfg.Wiki.Validate(); err != nil {
+		return nil, fmt.Errorf("wiki dirs: %w", err)
 	}
 	return cfg, nil
 }
@@ -79,6 +88,25 @@ func (c *Config) SourceDir() string {
 
 func WriteDefault(path string) error {
 	cfg := Default()
+	return Save(path, cfg)
+}
+
+func LoadFromPath(path string) (*Config, error) {
+	cfg, err := Load(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.Resolve(path); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func Save(path string, cfg *Config) error {
+	cfg.Wiki.Normalize()
+	if err := cfg.Wiki.Validate(); err != nil {
+		return fmt.Errorf("wiki dirs: %w", err)
+	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return err

@@ -25,7 +25,7 @@ type Result struct {
 
 func Run(cfgVaultRoot, cfgSourceRoot, cfgBuildRoot string, disc *vault.Discovery) (*Result, error) {
 	staging := filepath.Join(cfgBuildRoot, "staging")
-	wikiOut := filepath.Join(staging, "wiki")
+	wikiOut := filepath.Join(staging, cfgSourceRoot)
 	assetOut := filepath.Join(staging, "assets")
 
 	// Clean previous staging
@@ -53,6 +53,7 @@ func Run(cfgVaultRoot, cfgSourceRoot, cfgBuildRoot string, disc *vault.Discovery
 	opts := markdown.NormalizeOpts{
 		VaultRoot:   cfgVaultRoot,
 		SourceRoot:  disc.SourceRoot,
+		SourceRel:   cfgSourceRoot,
 		NoteIndex:   noteIndex,
 		AssetOutDir: assetOut,
 	}
