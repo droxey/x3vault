@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -14,7 +15,7 @@ func TestDefaultConfigValidates(t *testing.T) {
 
 func TestIsExcludedVaultPath(t *testing.T) {
 	cfg := Default()
-	for _, p := range []string{"raw/foo.md", ".obsidian/app.json", ".git/config", ".xte/build/x", ".x3vault/build/x"} {
+	for _, p := range []string{"raw/foo.md", ".obsidian/app.json", ".git/config", ".x3vault/build/x"} {
 		if !cfg.IsExcludedVaultPath(p) {
 			t.Fatalf("expected excluded: %s", p)
 		}
@@ -33,6 +34,23 @@ func TestDeviceTimeoutDefault(t *testing.T) {
 	cfg.Normalize()
 	if cfg.DeviceTimeout() != 60*time.Second {
 		t.Fatalf("normalized timeout = %v", cfg.DeviceTimeout())
+	}
+}
+
+func TestResolveBuildRootAlongsideVault(t *testing.T) {
+	vault := t.TempDir()
+	cfg := Default()
+	cfg.VaultRoot = vault
+	cfg.BuildRoot = DefaultBuildRootRel
+	if err := cfg.Resolve(filepath.Join(vault, ConfigFileName)); err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.Abs(filepath.Join(filepath.Dir(vault), "xte", "build"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BuildRoot != want {
+		t.Fatalf("BuildRoot = %q, want %q", cfg.BuildRoot, want)
 	}
 }
 

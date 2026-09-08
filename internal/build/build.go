@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -54,16 +55,19 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 	}
 	indexResult := markdown.BuildNoteIndex(noteRefs)
 	attachmentAbs := resolveAttachmentFolder(cfg)
+	wikiDirs := cfg.Wiki
+	wikiDirs.Normalize()
 
 	opts := markdown.NormalizeOpts{
-		VaultRoot:           cfg.VaultRoot,
-		SourceRoot:          disc.SourceRoot,
-		SourceRel:           cfg.SourceRoot,
-		AssetsRoot:          cfg.Build.AssetsRoot,
-		NoteIndex:           indexResult.Index,
-		AttachmentFolder:    attachmentAbs,
-		IsExcludedVaultPath: cfg.IsExcludedVaultPath,
-		AssetOutDir:         assetOut,
+		VaultRoot:              cfg.VaultRoot,
+		SourceRoot:             disc.SourceRoot,
+		SourceRel:              cfg.SourceRoot,
+		AssetsRoot:             cfg.Build.AssetsRoot,
+		NoteIndex:              indexResult.Index,
+		AttachmentFolder:       attachmentAbs,
+		IsExcludedVaultPath:    cfg.IsExcludedVaultPath,
+		ShouldIncludeSourceRel: wikiDirs.ShouldIncludeRelPath,
+		AssetOutDir:            assetOut,
 	}
 
 	res := &Result{StagingDir: staging}
@@ -105,6 +109,10 @@ func Run(cfg *config.Config, disc *vault.Discovery) (*Result, error) {
 		}
 	}
 
+	if err := pruneIgnoredOutput(wikiOut, wikiDirs); err != nil {
+		return res, fmt.Errorf("prune ignored output: %w", err)
+	}
+
 	gen, err := computeGeneration(wikiOut)
 	if err != nil {
 		return res, err
@@ -137,6 +145,39 @@ func resolveAttachmentFolder(cfg *config.Config) string {
 	}
 	rel := obsidian.AttachmentFolder(cfg.VaultRoot)
 	return obsidian.ResolveAttachmentPath(cfg.VaultRoot, rel)
+}
+
+// pruneIgnoredOutput removes any files or directories under ignored_dirs from build output.
+func pruneIgnoredOutput(wikiOut string, dirs config.WikiDirs) error {
+	dirs.Normalize()
+	for _, ig := range dirs.Ignored {
+		if err := os.RemoveAll(filepath.Join(wikiOut, filepath.FromSlash(ig))); err != nil {
+			return err
+		}
+	}
+	return filepath.WalkDir(wikiOut, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(wikiOut, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if !dirs.ShouldWalkDir(rel) {
+				return os.RemoveAll(path)
+			}
+			return nil
+		}
+		if !dirs.ShouldIncludeRelPath(rel) {
+			return os.Remove(path)
+		}
+		return nil
+	})
 }
 
 func computeGeneration(wikiDir string) (string, error) {

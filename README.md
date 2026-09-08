@@ -12,13 +12,29 @@ All build output is **markdown for on-device reading**: wikilinks become relativ
 - [x] Config + discovery (`all_except_ignored` dir mode)
 - [x] Markdown normalize for XTE e-readers + Obsidian attachment folder
 - [x] Alias-aware wikilink index (duplicate keys pick last)
-- [x] Deterministic build staging under `.xte/build`
+- [x] Deterministic build staging under `../xte/build` (alongside vault)
 - [x] Witch HTTP transport + ownership + content-hash sync (fail-fast)
 - [x] CLI: device init / sync / dry-run / config
 
 ## Quick start
 
-Build copies every discovered wiki note (normalized for XTE e-reader viewing) and every referenced attachment from the Obsidian vault into `.xte/build/current/`. Sync mirrors that tree to the device at `/xte`. Source files are never modified.
+Build copies every discovered wiki note (normalized for XTE e-reader viewing) and every referenced attachment from the Obsidian vault into `../xte/build/current/` (alongside the vault folder). Sync mirrors that tree to the device at `/xte`. The Obsidian vault is never modified.
+
+### Output layout
+
+For vault at `/path/to/llmwiki-vault/`:
+
+```
+/path/to/
+├── llmwiki-vault/          ← Obsidian vault (read-only to x3vault)
+│   ├── .xte.yaml
+│   └── wiki/
+└── xte/build/current/      ← build output (default build_root)
+    ├── wiki/               ← normalized notes
+    │   └── entities/note.md
+    └── assets/             ← referenced attachments
+        └── ab12/paper.pdf
+```
 
 ```bash
 go build -o bin/x3vault ./cmd/x3vault
@@ -45,9 +61,9 @@ wiki/
 └── analyses/
 ```
 
-**Directory policy (default):** `all_except_ignored` — every subdirectory under `source_root` is synced **except** ignored ones. Custom folders (`domains/`, `synthesis/`, etc.) need no extra config.
+**Directory policy (default):** `all_except_ignored` — every subdirectory under `source_root` is synced **except** ignored ones. Ignored directories are never written to build output, even when linked or embedded from other notes.
 
-**Never synced by default:** paths in `sync.exclude_vault_paths` (`raw`, `.obsidian`, `.git`, `.xte`), plus ignored dirs (`script/`, `references/`).
+**Never synced by default:** paths in `sync.exclude_vault_paths` (`raw`, `.obsidian`, `.git`), plus ignored wiki dirs (`script/`, `references/`).
 
 ```bash
 ./bin/x3vault config show                            # full config YAML
@@ -66,7 +82,7 @@ All settings live in `.xte.yaml` at the vault root (legacy `.x3vault.yaml` is st
 schema: 1
 vault_root: .
 source_root: wiki              # compiled wiki source (relative to vault_root)
-build_root: .xte/build         # local staging output
+build_root: ../xte/build       # alongside vault; resolves to ../xte/build/current at sync
 
 wiki:
   mode: all_except_ignored     # or whitelist
@@ -92,7 +108,6 @@ sync:
     - raw
     - .obsidian
     - .git
-    - .xte
 
 device:
   base_url: http://crosspoint.local
@@ -107,8 +122,8 @@ Sync compares **SHA-256 content hashes** when `sync.hash_manifest` is enabled. A
 
 ## Safety
 
-- **Obsidian vault is read-only.** x3vault never modifies `wiki/`, attachments, or `.obsidian/`. Build reads source notes and copies referenced attachments into `build_root/current/` only.
-- One-way only. The only vault writes are `.xte.yaml` (via `config` commands) and build output under `build_root`.
+- **Obsidian vault is read-only.** x3vault never modifies `wiki/`, attachments, or `.obsidian/`. Build output lives in `build_root/` (default `../xte/build/current/`), outside the vault.
+- One-way only. The only write inside the vault is `.xte.yaml` (via `config` commands).
 - Deletes only under the configured owned `device.root` after ownership marker is present.
 - `_meta/` is never deleted by sync.
 
@@ -120,6 +135,6 @@ Sync compares **SHA-256 content hashes** when `sync.hash_manifest` is enabled. A
 
 **Path rename:** Tooling paths renamed from `.x3vault` / `/x3vault` to `.xte` / `/xte` (config file, build dir, device root, ownership marker). Legacy `.x3vault.yaml` is still loaded when `.xte.yaml` is absent.
 
-**Obsidian vault:** Never modified. Build copies all discovered wiki notes and referenced attachments to `.xte/build/current/`; sync mirrors to the device.
+**Obsidian vault:** Never modified. Build copies all discovered wiki notes and referenced attachments to `../xte/build/current/`; sync mirrors to the device.
 
 **Output format:** All device markdown is normalized for XTE e-reader screens (visible `#` titles, stripped Obsidian syntax, PNG/JPEG/GIF images; SVG/WebP linked with warnings).

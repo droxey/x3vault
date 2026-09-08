@@ -17,7 +17,7 @@ const (
 	ConfigFileName       = ".xte.yaml"
 	LegacyConfigFileName = ".x3vault.yaml"
 	ToolDirName          = ".xte"
-	DefaultBuildRootRel  = ".xte/build"
+	DefaultBuildRootRel  = "../xte/build"
 	DefaultDeviceRoot    = "/xte"
 	DefaultOwnershipTool = "xte"
 )
@@ -67,7 +67,7 @@ func DefaultSync() SyncConfig {
 		FailFast:          true,
 		HashManifest:      true,
 		CleanEmptyDirs:    true,
-		ExcludeVaultPaths: []string{"raw", ".obsidian", ".git", ToolDirName, ".x3vault"},
+		ExcludeVaultPaths: []string{"raw", ".obsidian", ".git", ".x3vault"},
 	}
 }
 
@@ -244,6 +244,11 @@ func (c *Config) Resolve(configPath string) error {
 	if !filepath.IsAbs(c.BuildRoot) {
 		c.BuildRoot = filepath.Join(c.VaultRoot, c.BuildRoot)
 	}
+	buildAbs, err := filepath.Abs(c.BuildRoot)
+	if err != nil {
+		return fmt.Errorf("build_root abs: %w", err)
+	}
+	c.BuildRoot = buildAbs
 	return nil
 }
 

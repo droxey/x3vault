@@ -38,14 +38,15 @@ type NormalizedNote struct {
 }
 
 type NormalizeOpts struct {
-	VaultRoot           string
-	SourceRoot          string
-	SourceRel           string
-	AssetsRoot          string
-	NoteIndex           map[string]string
-	AttachmentFolder    string
-	IsExcludedVaultPath func(string) bool
-	AssetOutDir         string
+	VaultRoot             string
+	SourceRoot            string
+	SourceRel             string
+	AssetsRoot            string
+	NoteIndex             map[string]string
+	AttachmentFolder      string
+	IsExcludedVaultPath   func(string) bool
+	ShouldIncludeSourceRel func(string) bool
+	AssetOutDir           string
 }
 
 func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, error) {
@@ -108,6 +109,13 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 			out.Unresolved = append(out.Unresolved, target)
 			return fmt.Sprintf("[embed: %s](%s)", target, target)
 		}
+		if opts.ShouldIncludeSourceRel != nil && !opts.ShouldIncludeSourceRel(resolved) {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("embed target in ignored directory: %s", target))
+			if alt == "" {
+				alt = target
+			}
+			return fmt.Sprintf("[embed: %s](%s)", alt, target)
+		}
 		label := alt
 		if label == "" {
 			label = strings.TrimSuffix(filepath.Base(resolved), ".md")
@@ -126,6 +134,13 @@ func Normalize(absPath, relPath string, opts NormalizeOpts) (*NormalizedNote, er
 		resolved, ok := resolveNote(target, opts.NoteIndex)
 		if !ok {
 			out.Unresolved = append(out.Unresolved, target)
+			if label == "" {
+				label = target
+			}
+			return fmt.Sprintf("[%s](%s)", label, target)
+		}
+		if opts.ShouldIncludeSourceRel != nil && !opts.ShouldIncludeSourceRel(resolved) {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("wikilink target in ignored directory: %s", target))
 			if label == "" {
 				label = target
 			}
@@ -173,6 +188,14 @@ func assetCandidates(target, noteDir string, opts NormalizeOpts) []string {
 		if p == "" {
 			return
 		}
+		if opts.ShouldIncludeSourceRel != nil {
+			if rel, err := filepath.Rel(opts.SourceRoot, p); err == nil {
+				rel = filepath.ToSlash(rel)
+				if !opts.ShouldIncludeSourceRel(rel) {
+					return
+				}
+			}
+		}
 		if opts.IsExcludedVaultPath != nil {
 			if rel, err := filepath.Rel(opts.VaultRoot, p); err == nil {
 				if opts.IsExcludedVaultPath(filepath.ToSlash(rel)) {
@@ -208,6 +231,13 @@ func resolveAsset(target, noteDir string, opts NormalizeOpts) (*AssetRef, error)
 	}
 	if found == "" {
 		return nil, fmt.Errorf("not found")
+	}
+	if opts.ShouldIncludeSourceRel != nil {
+		if rel, err := filepath.Rel(opts.SourceRoot, found); err == nil {
+			if !opts.ShouldIncludeSourceRel(filepath.ToSlash(rel)) {
+				return nil, fmt.Errorf("ignored directory")
+			}
+		}
 	}
 
 	data, err := os.ReadFile(found)
