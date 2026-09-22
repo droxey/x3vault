@@ -2,12 +2,15 @@ package sim
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"path"
 	"strings"
 	"time"
 )
+
+const maxUploadBytes = 16 << 20
 
 // Status matches internal/sync.Status JSON the CLI decodes.
 type Status struct {
@@ -53,7 +56,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/delete", s.handleDelete)
 	mux.HandleFunc("/download", s.handleDownload)
 	mux.HandleFunc("/", s.handleUI)
-	return mux
+	return recoverHandler(mux)
+}
+
+func recoverHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -101,19 +115,14 @@ func (s *Server) handleMkdir(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	_ = r.ParseForm()
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
 	parent := r.Form.Get("path")
 	name := r.Form.Get("name")
 	if err := s.Store.Mkdir(parent, name); err != nil {
-		if err.Error() == "already exists" {
-			http.Error(w, "already exists", http.StatusConflict)
-			return
-		}
-		if err.Error() == "missing parent" {
-			http.Error(w, "missing parent", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeStoreError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -125,15 +134,20 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir := r.URL.Query().Get("path")
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "invalid upload", http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
-	data, err := io.ReadAll(file)
+	data, err := io.ReadAll(io.LimitReader(file, maxUploadBytes+1))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "invalid upload", http.StatusBadRequest)
+		return
+	}
+	if int64(len(data)) > maxUploadBytes {
+		http.Error(w, "upload too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	if err := s.Store.Upload(dir, header.Filename, data); err != nil {
@@ -148,20 +162,14 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	_ = r.ParseForm()
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
 	p := r.Form.Get("path")
 	typ := r.Form.Get("type")
 	if err := s.Store.Delete(p, typ); err != nil {
-		msg := err.Error()
-		if msg == "directory not empty" {
-			http.Error(w, "Folder is not empty. Delete contents first. directory not empty", http.StatusConflict)
-			return
-		}
-		if msg == "not found" {
-			http.NotFound(w, r)
-			return
-		}
-		http.Error(w, msg, http.StatusBadRequest)
+		writeStoreError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -181,10 +189,28 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+func writeStoreError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrAlreadyExists):
+		http.Error(w, "already exists", http.StatusConflict)
+	case errors.Is(err, ErrMissingParent):
+		http.Error(w, "missing parent", http.StatusNotFound)
+	case errors.Is(err, ErrNotFound):
+		http.Error(w, "not found", http.StatusNotFound)
+	case errors.Is(err, ErrDirNotEmpty):
+		http.Error(w, "Folder is not empty. Delete contents first. directory not empty", http.StatusConflict)
+	case errors.Is(err, ErrConflict):
+		http.Error(w, "missing parent or conflicting directory", http.StatusConflict)
+	case errors.Is(err, ErrInvalidPath), errors.Is(err, ErrInvalidName), errors.Is(err, ErrRefuseRoot):
+		http.Error(w, "invalid path", http.StatusBadRequest)
+	default:
+		http.Error(w, "request failed", http.StatusBadRequest)
+	}
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	enc := json.NewEncoder(w)
-	_ = enc.Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func joinURLPath(dir, name string) string {
