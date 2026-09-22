@@ -133,6 +133,20 @@ func TestDeleteNonEmptyDirFails(t *testing.T) {
 	}
 }
 
+func TestRejectsInvalidPaths(t *testing.T) {
+	srv := httptest.NewServer(NewServer().Handler())
+	t.Cleanup(srv.Close)
+
+	resp, err := http.PostForm(srv.URL+"/mkdir", url.Values{"name": {".."}, "path": {"/"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("mkdir .. status %d", resp.StatusCode)
+	}
+}
+
 func TestMissingDirListIs404(t *testing.T) {
 	srv := httptest.NewServer(NewServer().Handler())
 	t.Cleanup(srv.Close)
