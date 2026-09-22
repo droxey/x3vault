@@ -1,11 +1,25 @@
 package sim
 
 import (
-	"fmt"
+	"errors"
 	"path"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
+
+var (
+	ErrNotFound      = errors.New("not found")
+	ErrAlreadyExists = errors.New("already exists")
+	ErrMissingParent = errors.New("missing parent")
+	ErrDirNotEmpty   = errors.New("directory not empty")
+	ErrInvalidPath   = errors.New("invalid path")
+	ErrInvalidName   = errors.New("invalid name")
+	ErrConflict      = errors.New("conflicting directory")
+	ErrRefuseRoot    = errors.New("refuse root")
+)
+
+const maxPathBytes = 1024
 
 // Store is an in-memory POSIX file tree used by the Witch simulator.
 type Store struct {
@@ -22,14 +36,35 @@ func NewStore() *Store {
 }
 
 func cleanPath(p string) string {
+	c, err := parseDevicePath(p)
+	if err != nil {
+		return "/"
+	}
+	return c
+}
+
+// parseDevicePath validates and canonicalizes a Witch POSIX path.
+func parseDevicePath(p string) (string, error) {
+	if strings.ContainsRune(p, 0) || strings.Contains(p, "\\") {
+		return "", ErrInvalidPath
+	}
+	if !utf8.ValidString(p) {
+		return "", ErrInvalidPath
+	}
+	if len(p) > maxPathBytes {
+		return "", ErrInvalidPath
+	}
 	if p == "" {
-		return "/"
+		return "/", nil
 	}
-	p = path.Clean("/" + strings.TrimPrefix(p, "/"))
-	if p == "." {
-		return "/"
+	c := path.Clean("/" + strings.TrimPrefix(p, "/"))
+	if c == "." {
+		c = "/"
 	}
-	return p
+	if !path.IsAbs(c) {
+		return "", ErrInvalidPath
+	}
+	return c, nil
 }
 
 func parentOf(p string) string {
@@ -45,15 +80,23 @@ func parentOf(p string) string {
 }
 
 func (s *Store) HasDir(p string) bool {
+	c, err := parseDevicePath(p)
+	if err != nil {
+		return false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.dirs[cleanPath(p)]
+	return s.dirs[c]
 }
 
 func (s *Store) ReadFile(p string) ([]byte, bool) {
+	c, err := parseDevicePath(p)
+	if err != nil {
+		return nil, false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	data, ok := s.files[cleanPath(p)]
+	data, ok := s.files[c]
 	if !ok {
 		return nil, false
 	}
@@ -72,9 +115,13 @@ func (s *Store) List(dir string) ([]Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	dir = cleanPath(dir)
+	var err error
+	dir, err = parseDevicePath(dir)
+	if err != nil {
+		return nil, err
+	}
 	if !s.dirs[dir] {
-		return nil, fmt.Errorf("not found")
+		return nil, ErrNotFound
 	}
 
 	prefix := dir
@@ -132,17 +179,21 @@ func (s *Store) Mkdir(parent, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	parent = cleanPath(parent)
+	var err error
+	parent, err = parseDevicePath(parent)
+	if err != nil {
+		return err
+	}
 	name = strings.Trim(name, "/")
-	if name == "" || strings.Contains(name, "/") {
-		return fmt.Errorf("invalid name")
+	if name == "" || strings.Contains(name, "/") || strings.ContainsRune(name, 0) || name == "." || name == ".." {
+		return ErrInvalidName
 	}
 	if !s.dirs[parent] {
-		return fmt.Errorf("missing parent")
+		return ErrMissingParent
 	}
 	p := path.Join(parent, name)
 	if s.dirs[p] || fileExistsLocked(s, p) {
-		return fmt.Errorf("already exists")
+		return ErrAlreadyExists
 	}
 	s.dirs[p] = true
 	return nil
@@ -152,17 +203,21 @@ func (s *Store) Upload(dir, filename string, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	dir = cleanPath(dir)
+	var err error
+	dir, err = parseDevicePath(dir)
+	if err != nil {
+		return err
+	}
 	filename = path.Base(filename)
-	if filename == "." || filename == "/" || filename == "" {
-		return fmt.Errorf("invalid filename")
+	if filename == "." || filename == "/" || filename == "" || filename == ".." || strings.ContainsRune(filename, 0) {
+		return ErrInvalidName
 	}
 	p := path.Join(dir, filename)
 	if !s.dirs[dir] {
-		return fmt.Errorf("missing parent")
+		return ErrMissingParent
 	}
 	if s.dirs[p] {
-		return fmt.Errorf("conflicting directory")
+		return ErrConflict
 	}
 	cp := make([]byte, len(data))
 	copy(cp, data)
@@ -174,30 +229,34 @@ func (s *Store) Delete(itemPath, itemType string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	itemPath = cleanPath(itemPath)
+	var err error
+	itemPath, err = parseDevicePath(itemPath)
+	if err != nil {
+		return err
+	}
 	if itemPath == "/" {
-		return fmt.Errorf("refuse root")
+		return ErrRefuseRoot
 	}
 	if itemType == "directory" || itemType == "folder" {
 		if !s.dirs[itemPath] {
-			return fmt.Errorf("not found")
+			return ErrNotFound
 		}
 		prefix := itemPath + "/"
 		for d := range s.dirs {
 			if strings.HasPrefix(d, prefix) {
-				return fmt.Errorf("directory not empty")
+				return ErrDirNotEmpty
 			}
 		}
 		for f := range s.files {
 			if strings.HasPrefix(f, prefix) {
-				return fmt.Errorf("directory not empty")
+				return ErrDirNotEmpty
 			}
 		}
 		delete(s.dirs, itemPath)
 		return nil
 	}
 	if _, ok := s.files[itemPath]; !ok {
-		return fmt.Errorf("not found")
+		return ErrNotFound
 	}
 	delete(s.files, itemPath)
 	return nil
